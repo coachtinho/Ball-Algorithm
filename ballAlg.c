@@ -1,5 +1,6 @@
 #include <omp.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include "gen_points.h"
 
 int n_dims;
@@ -19,4 +20,7 @@ int main(int argc, char *argv[]) {
     fprintf(stderr, "%.11f\n", exec_time);
 
     /* dump_tree(root); */
+
+    free(*pts);
+    free(pts);
 }
