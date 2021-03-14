@@ -72,7 +72,7 @@ void add_points(double *p1, double *p2, double *result) {
 /* Computes inner product of p1 and p2 */
 double inner_product(double *p1, double *p2) {
     long i;
-    double result = 0;
+    double result = 0.0;
 
     for (i = 0; i < n_dims; i++) {
         result += p1[i] * p2[i];
@@ -103,17 +103,14 @@ double *project(double *p, double *a, double *b) {
     numerator = inner_product(auxiliary1, auxiliary2);
 
     /* Denominator of formula */
-    sub_points(b, a, auxiliary1);
-    sub_points(b, a, auxiliary2);
-    denominator = inner_product(auxiliary1, auxiliary2);
+    denominator = inner_product(auxiliary2, auxiliary2);
 
     fraction = numerator / denominator;
-    sub_points(b, a, auxiliary1);
-    mul_point(auxiliary1, fraction);
-    add_points(auxiliary1, a, auxiliary2);
+    mul_point(auxiliary2, fraction);
+    add_points(auxiliary2, a, auxiliary1);
 
-    free(auxiliary1); 
-    return auxiliary2;
+    free(auxiliary2); 
+    return auxiliary1;
 }
 
 void build_tree(double **pts, long *current_set, long set_size) {
@@ -126,7 +123,6 @@ void build_tree(double **pts, long *current_set, long set_size) {
     /* Project points onto ab */
     for (i = 0; i < set_size; i++) {
         projected[i] = project(pts[current_set[i]], pts[a], pts[b]);
-        /* print_point(projected[i], n_dims); */
     }
 
 #ifdef DEBUG
