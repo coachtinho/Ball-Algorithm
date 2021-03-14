@@ -3,3 +3,5 @@ ballQuery
 ballAlg
 compile_flags.txt
 .vscode/
+Visualizer/.idea
+Visualizer/venv

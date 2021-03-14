@@ -8,6 +8,9 @@
 int n_dims;
 long n_points;
 
+FILE *ptsOutputFile;
+FILE *projOutputFile;
+
 typedef struct _node {
     long center;
     long radius;
@@ -126,6 +129,20 @@ void build_tree(double **pts, long *current_set, long set_size) {
         /* print_point(projected[i], n_dims); */
     }
 
+#ifdef DEBUG
+    if (n_dims != 2) {
+        printf("Visualization only works in 2d, skipping...");
+    } else {
+        projOutputFile = fopen("projections.csv", "w");
+        fprintf(projOutputFile, "x,y,projx,projy\n");
+        fprintf(projOutputFile, "%f,%f,%f,%f\n", pts[a][0], pts[a][1], pts[b][0], pts[b][1]);
+        for (i = 0; i < set_size; i++) {
+            fprintf(projOutputFile, "%f,%f,%f,%f\n", pts[current_set[i]][0], pts[current_set[i]][1], projected[i][0], projected[i][1]);
+        }
+        fclose(projOutputFile);
+    }
+#endif
+
     /* Ask professor if it's fine to have memory leaks
      * If it is, remove this part
      * */
@@ -147,6 +164,20 @@ int main(int argc, char *argv[]) {
 
     exec_time = -omp_get_wtime();
     double **pts = get_points(argc, argv, &n_dims, &n_points);
+
+#ifdef DEBUG
+    if (n_dims != 2) {
+        printf("Visualization only works in 2d, skipping...");
+    } else {
+        ptsOutputFile = fopen("pts.csv", "w");
+        fprintf(ptsOutputFile, "x,y\n");
+        long i;
+        for (i = 0; i < n_points; i++) {
+            fprintf(ptsOutputFile, "%f,%f\n", pts[i][0], pts[i][1]);
+        }
+        fclose(ptsOutputFile);
+    }
+#endif
 
     current_set = (long*) malloc(n_points * sizeof(long));
     assert(current_set);
