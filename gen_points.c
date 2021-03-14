@@ -3,17 +3,13 @@
 
 #define RANGE 10
 
-void print_points(double **pts, int n_points, int n_dims) {
-    int i = 0, j = 0;
-    for (i = 0; i < n_points; i++)
-    {
-        printf("(%f", pts[i][j]);
-        for (j = 1; j < n_dims; j++)
-        {
-            printf(" ; %f", pts[i][j]);
-        }
-        printf(")\n");
+void print_point(double *point, int n_dims) {
+    int i;
+
+    for (i = 0; i < n_dims - 1; i++) {
+        printf("%lf,", point[i]);
     }
+    printf("%lf\n", point[i]);
 }
 
 double **create_array_pts(int n_dims, long np)
@@ -69,7 +65,8 @@ double **get_points(int argc, char *argv[], int *n_dims, long *np)
             pt_arr[i][j] = RANGE * ((double) random()) / RAND_MAX;
 
 #ifdef DEBUG
-    print_points(pt_arr, *np, *n_dims);
+    for (i = 0; i < *np; i++)
+        print_point(pt_arr[i], *n_dims);
 #endif
 
     return pt_arr;

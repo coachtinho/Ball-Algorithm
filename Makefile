@@ -8,7 +8,7 @@ else
 CFLAGS = -Wall
 endif
 
-LDFLAGS = -fopenmp
+LDFLAGS = -fopenmp -lm
 SERIAL = ballAlg
 TARGETS = $(SERIAL) ballQuery
 
