@@ -1,7 +1,13 @@
 SOURCES = ballAlg.c gen_points.c
 OBJS = $(SOURCES:%.c=%.o)
 CC = gcc
+
+ifdef DEBUG
+CFLAGS = -Wall -DDEBUG
+else
 CFLAGS = -Wall
+endif
+
 LDFLAGS = -fopenmp
 SERIAL = ballAlg
 TARGETS = $(SERIAL) ballQuery
@@ -25,4 +31,4 @@ ballQuery: ballQuery.c
 
 clean:
 	@echo Cleaning...
-	rm $(OBJS) $(TARGETS)
+	rm -f $(OBJS) $(TARGETS)
