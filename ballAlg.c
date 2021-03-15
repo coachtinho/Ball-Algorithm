@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <math.h>
 #include <assert.h>
+#include <string.h>
 #include "gen_points.h"
 
 int n_dims;
@@ -65,7 +66,7 @@ void median(double **pts, long pts_size, long a, double *median_pt)
 
     if (pts_size % 2 != 0)
     {
-        median_pt = to_sort[pts_size / 2].pt;
+        memcpy(median_pt, to_sort[pts_size / 2].pt, sizeof(double) * n_dims);
     }
     else
     {
@@ -210,7 +211,11 @@ void build_tree(double **pts, long *current_set, long set_size)
     double median_pt[n_dims];
 
     median(projected, set_size, a, median_pt);
+
+#ifdef DEBUG
+    printf("median = ");
     print_point(median_pt, n_dims);
+#endif
 
     /* Split */
 
