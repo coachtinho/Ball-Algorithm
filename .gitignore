@@ -5,3 +5,6 @@ compile_flags.txt
 .vscode/
 Visualizer/.idea
 Visualizer/venv
+projections.csv
+pts.csv
+Visualizer/projection.png
