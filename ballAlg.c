@@ -149,47 +149,48 @@ void mul_point(double *p1, double constant)
     }
 }
 
-double *project(double *p, double *a, double *b)
-{
-    double *auxiliary1 = (double *)malloc(n_dims * sizeof(double));
-    double *auxiliary2 = (double *)malloc(n_dims * sizeof(double));
-    assert(auxiliary1);
-    assert(auxiliary2);
+void project(double *p, double *a, double *b, double *result) {
+    double *auxiliary = (double*) malloc(n_dims * sizeof(double));
+    assert(auxiliary);
     double numerator, denominator, fraction;
 
     /* Numerator of formula */
-    sub_points(p, a, auxiliary1);
-    sub_points(b, a, auxiliary2);
-    numerator = inner_product(auxiliary1, auxiliary2);
+    sub_points(p, a, result);
+    sub_points(b, a, auxiliary);
+    numerator = inner_product(result, auxiliary);
 
     /* Denominator of formula */
-    denominator = inner_product(auxiliary2, auxiliary2);
+    denominator = inner_product(auxiliary, auxiliary);
 
     fraction = numerator / denominator;
-    mul_point(auxiliary2, fraction);
-    add_points(auxiliary2, a, auxiliary1);
+    mul_point(auxiliary, fraction);
+    add_points(auxiliary, a, result);
 
-    free(auxiliary2);
-    return auxiliary1;
+    free(auxiliary); 
 }
 
 void build_tree(double **pts, long *current_set, long set_size)
 {
     long a, b, i;
-    double **projected = (double **)malloc(set_size * sizeof(double *));
+    double *projected_coords = (double*) malloc(n_dims * set_size * sizeof(double));
+    double **projected = (double**) malloc(set_size * sizeof(double*));
+    assert(projected_coords);
     assert(projected);
 
     get_furthest_points(pts, current_set, set_size, &a, &b);
 
     /* Project points onto ab */
-    for (i = 0; i < set_size; i++)
-    {
-        projected[i] = project(pts[current_set[i]], pts[a], pts[b]);
+    for (i = 0; i < set_size; i++) {
+        project(pts[current_set[i]], pts[a], pts[b], &projected_coords[i * n_dims]);
+        projected[i] = &projected_coords[i * n_dims];
     }
 
 #ifdef DEBUG
-    if (n_dims != 2)
-    {
+    printf("a = ");
+    print_point(pts[a], n_dims);
+    printf("b = ");
+    print_point(pts[b], n_dims);
+    if (n_dims != 2) {
         printf("Visualization only works in 2d, skipping...");
     }
     else
@@ -216,16 +217,10 @@ void build_tree(double **pts, long *current_set, long set_size)
     /* Ask professor if it's fine to have memory leaks
      * If it is, remove this part
      * */
-    for (i = 0; i < set_size; i++)
-    {
-        free(projected[i]);
-    }
+    free(projected_coords);
     free(projected);
 
-    printf("a = ");
-    print_point(pts[a], n_dims);
-    printf("b = ");
-    print_point(pts[b], n_dims);
+    free(current_set);
 }
 
 int main(int argc, char *argv[])
@@ -263,7 +258,6 @@ int main(int argc, char *argv[])
 
     /* node_t *root = build_tree(pts, current_set); */
     build_tree(pts, current_set, n_points);
-    free(current_set);
 
     exec_time += omp_get_wtime();
     fprintf(stderr, "%.11f\n", exec_time);

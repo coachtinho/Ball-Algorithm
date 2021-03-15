@@ -3,7 +3,7 @@ OBJS = $(SOURCES:%.c=%.o)
 CC = gcc
 
 ifdef DEBUG
-CFLAGS = -Wall -DDEBUG
+CFLAGS = -Wall -g -DDEBUG
 else
 CFLAGS = -Wall
 endif
