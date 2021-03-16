@@ -227,7 +227,6 @@ node_t *build_tree(double **pts, long *current_set, long set_size)
     median(projected, set_size, center);
     node->id = current_id++;
     node->center = center;
-    node->radius = 0.0;
 
 #ifdef DEBUG
     printf("median = ");
@@ -237,10 +236,15 @@ node_t *build_tree(double **pts, long *current_set, long set_size)
     /* Split */
     long *L_set = (long*) malloc(sizeof(long));
     long *R_set = (long*) malloc(sizeof(long));
+    double dist, max_distance = 0.0;
     assert(L_set);
     assert(R_set);
 
     for (i = 0; i < set_size; i++) {
+        if ((dist = distance(center, projected[i])) > max_distance) {
+            max_distance = dist;
+        }
+
         if (projected[i][0] < center[0]) {
             L_count++;
             L_set = (long*) realloc(L_set, L_count * sizeof(long));
@@ -251,6 +255,7 @@ node_t *build_tree(double **pts, long *current_set, long set_size)
             R_set[R_count - 1] = current_set[i];
         }
     }
+    node->radius = max_distance;
 
     free(projected_coords);
     free(projected);
