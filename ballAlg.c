@@ -22,6 +22,11 @@ typedef struct _node
     struct _node *R;
 } node_t;
 
+typedef struct _point {
+    long index;
+    double *projection;
+} point_t;
+
 double distance(double *pt1, double *pt2)
 {
     double dist = 0.0;
@@ -41,45 +46,51 @@ void mean(double *pt1, double *pt2, double *mean)
 
 int cmpfunc(const void *a, const void *b)
 {
-    return (double) ** (double**) a > (double) ** (double**) b;
-}
+    point_t *a_ = (point_t*) a;
+    point_t *b_ = (point_t*) b;
 
-/* Computes the median point of a set of points in a line */
-void median(double **pts, long pts_size, double *median_pt)
-{
-    double *to_sort[pts_size];
-
-    /* Copies points to array for sorting */
-    for (long i = 0; i < pts_size; i++)
-    {
-        to_sort[i] = pts[i];
+    for (long i = 0; i < n_dims; i++) {
+        if (a_->projection[i] > b_->projection[i]) {
+            return 1;
+        } else if (a_->projection[i] < b_->projection[i]) {
+            return -1;
+        }
     }
 
+    return 0;
+}
+
+
+/* Computes the median point of a set of points in a line */
+long median(point_t *pts, long pts_size, double *median_pt)
+{
     /* Sorts array */
-    qsort(to_sort, pts_size, sizeof(double*), cmpfunc);
+    qsort(pts, pts_size, sizeof(point_t), cmpfunc);
 
     if (pts_size % 2 != 0)
     {
-        memcpy(median_pt, to_sort[pts_size / 2], sizeof(double) * n_dims);
+        memcpy(median_pt, pts[pts_size / 2].projection, sizeof(double) * n_dims);
     }
     else
     {
-        mean(to_sort[pts_size / 2 - 1], to_sort[pts_size / 2], median_pt);
+        mean(pts[pts_size / 2 - 1].projection, pts[pts_size / 2].projection, median_pt);
     }
+        
+    return pts_size / 2;
 }
 
-void get_furthest_points(double **pts, long *current_set, long set_size, long *a, long *b)
+void get_furthest_points(double **pts, point_t *current_set, long set_size, long *a, long *b)
 {
     long i;
     double dist, max_distance = 0.0;
 
     /* Lock b as first point in set and find a */
-    *b = 0;
+    *b = current_set[0].index;
     for (i = 1; i < set_size; i++)
     {
-        if ((dist = distance(pts[current_set[*b]], pts[current_set[i]])) > max_distance)
+        if ((dist = distance(pts[*b], pts[current_set[i].index])) > max_distance)
         {
-            *a = i;
+            *a = current_set[i].index;
             max_distance = dist;
         }
     }
@@ -89,9 +100,9 @@ void get_furthest_points(double **pts, long *current_set, long set_size, long *a
     /* Find b */
     for (i = 0; i < set_size; i++)
     {
-        if (i != *a && (dist = distance(pts[current_set[*a]], pts[current_set[i]])) > max_distance)
+        if ((dist = distance(pts[*a], pts[current_set[i].index])) > max_distance)
         {
-            *b = i;
+            *b = current_set[i].index;
             max_distance = dist;
         }
     }
@@ -164,50 +175,45 @@ void project(double *p, double *a, double *b, double *result) {
     free(auxiliary); 
 }
 
-node_t *build_tree(double **pts, long *current_set, long set_size)
+node_t *build_tree(double **pts, point_t *current_set, long set_size)
 {
-    long a, b, i, L_count = 0, R_count = 0;
+    long a, b, i;
 
-    double *projected_coords = (double*) malloc(n_dims * set_size * sizeof(double));
-    double **projected = (double**) malloc(set_size * sizeof(double*));
 
     double *center = (double*) malloc(n_dims * sizeof(double));
     node_t *node = (node_t*) malloc(sizeof(node_t));
 
-    assert(projected_coords);
-    assert(projected);
     assert(center);
     assert(node);
 
     if (set_size == 1) {
-        for (long d = 0; d < n_dims; d++) {
-            center[d] = pts[current_set[0]][d];
-        }
+        memcpy(center, pts[current_set[0].index], sizeof(double) * n_dims);
         node->id = current_id++;
         node->center = center;
         node->radius = 0.0;
         node->L = NULL;
         node->R = NULL;
 
-        free(projected);
-        free(projected_coords);
 
         return node;
     }
 
     get_furthest_points(pts, current_set, set_size, &a, &b);
 
+    double *projections = (double*) malloc(n_dims * set_size * sizeof(double));
+    assert(projections);
+
     /* Project points onto ab */
     for (i = 0; i < set_size; i++) {
-        project(pts[current_set[i]], pts[current_set[a]], pts[current_set[b]], &projected_coords[i * n_dims]);
-        projected[i] = &projected_coords[i * n_dims];
+        project(pts[current_set[i].index], pts[a], pts[b], &projections[i * n_dims]);
+        current_set[i].projection = &projections[i * n_dims];
     }
 
 #ifdef DEBUG
     printf("a = ");
-    print_point(pts[current_set[a]], n_dims);
+    print_point(pts[a], n_dims);
     printf("b = ");
-    print_point(pts[current_set[b]], n_dims);
+    print_point(pts[b], n_dims);
     if (n_dims != 2) {
         printf("Visualization only works in 2d, skipping...");
     }
@@ -217,14 +223,14 @@ node_t *build_tree(double **pts, long *current_set, long set_size)
         fprintf(projOutputFile, "x,y,projx,projy\n");
         for (i = 0; i < set_size; i++)
         {
-            fprintf(projOutputFile, "%f,%f,%f,%f\n", pts[current_set[i]][0], pts[current_set[i]][1], projected[i][0], projected[i][1]);
+            fprintf(projOutputFile, "%f,%f,%f,%f\n", pts[current_set[i].index][0], pts[current_set[i].index][1], current_set[i].projection[0], current_set[i].projection[1]);
         }
         fclose(projOutputFile);
     }
 #endif
 
     /* Find median point */
-    median(projected, set_size, center);
+    long pivot = median(current_set, set_size, center);
     node->id = current_id++;
     node->center = center;
 
@@ -234,36 +240,14 @@ node_t *build_tree(double **pts, long *current_set, long set_size)
 #endif
 
     /* Split */
-    long *L_set = (long*) malloc(sizeof(long));
-    long *R_set = (long*) malloc(sizeof(long));
-    double dist, max_distance = 0.0;
-    assert(L_set);
-    assert(R_set);
+    double distA = distance(center, pts[current_set[0].index]);
+    double distB = distance(center, pts[current_set[set_size - 1].index]);
+    node->radius = distA > distB ? distA : distB;
 
-    for (i = 0; i < set_size; i++) {
-        if ((dist = distance(center, projected[i])) > max_distance) {
-            max_distance = dist;
-        }
+    free(projections);
 
-        if (projected[i][0] < center[0]) {
-            L_count++;
-            L_set = (long*) realloc(L_set, L_count * sizeof(long));
-            L_set[L_count - 1] = current_set[i];
-        } else {
-            R_count++;
-            R_set = (long*) realloc(R_set, R_count * sizeof(long));
-            R_set[R_count - 1] = current_set[i];
-        }
-    }
-    node->radius = max_distance;
-
-    free(projected_coords);
-    free(projected);
-
-    node->L = build_tree(pts, L_set, L_count);
-    free(L_set);
-    node->R = build_tree(pts, R_set, R_count);
-    free(R_set);
+    node->L = build_tree(pts, current_set, pivot);
+    node->R = build_tree(pts, &current_set[pivot], set_size - pivot);
 
     return node;
 }
@@ -300,11 +284,11 @@ void free_tree(node_t *root) {
 int main(int argc, char *argv[])
 {
     double exec_time;
-    long *current_set;
     long i;
 
     exec_time = -omp_get_wtime();
     double **pts = get_points(argc, argv, &n_dims, &n_points);
+    point_t *current_set = (point_t*) malloc(n_points * sizeof(point_t));
 
 #ifdef DEBUG
     if (n_dims != 2)
@@ -324,14 +308,12 @@ int main(int argc, char *argv[])
     }
 #endif
 
-    current_set = (long *)malloc(n_points * sizeof(long));
-    assert(current_set);
-
     for (i = 0; i < n_points; i++)
-        current_set[i] = i;
+        current_set[i].index = i;
 
     node_t *root = build_tree(pts, current_set, n_points);
     free(current_set);
+
 
     exec_time += omp_get_wtime();
     fprintf(stderr, "%.11f\n", exec_time);
