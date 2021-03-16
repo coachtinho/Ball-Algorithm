@@ -3,9 +3,9 @@ OBJS = $(SOURCES:%.c=%.o)
 CC = gcc
 
 ifdef DEBUG
-CFLAGS = -Wall -g -DDEBUG
+CFLAGS = -Wall -O3 -g -DDEBUG
 else
-CFLAGS = -Wall
+CFLAGS = -Wall -O3
 endif
 
 LDFLAGS = -fopenmp -lm
@@ -16,7 +16,7 @@ all: $(TARGETS)
 
 
 ballAlg: ballAlg.o gen_points.o
-	$(CC) $(CFLAGS) $^ -o $@ -O3 $(LDFLAGS)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
 
 
 ballAlg.o: ballAlg.c gen_points.h

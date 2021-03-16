@@ -155,7 +155,7 @@ void mul_point(double *p1, double constant)
     }
 }
 
-void project(double *p, double *a, double *b, double *result) {
+double *project(double *p, double *a, double *b, double *result) {
     double *auxiliary = (double*) malloc(n_dims * sizeof(double));
     assert(auxiliary);
     double numerator, denominator, fraction;
@@ -173,6 +173,8 @@ void project(double *p, double *a, double *b, double *result) {
     add_points(auxiliary, a, result);
 
     free(auxiliary); 
+
+    return result;
 }
 
 node_t *build_tree(double **pts, point_t *current_set, long set_size)
@@ -205,8 +207,7 @@ node_t *build_tree(double **pts, point_t *current_set, long set_size)
 
     /* Project points onto ab */
     for (i = 0; i < set_size; i++) {
-        project(pts[current_set[i].index], pts[a], pts[b], &projections[i * n_dims]);
-        current_set[i].projection = &projections[i * n_dims];
+        current_set[i].projection = project(pts[current_set[i].index], pts[a], pts[b], &projections[i * n_dims]);
     }
 
 #ifdef DEBUG
@@ -312,11 +313,12 @@ int main(int argc, char *argv[])
         current_set[i].index = i;
 
     node_t *root = build_tree(pts, current_set, n_points);
-    free(current_set);
 
 
     exec_time += omp_get_wtime();
     fprintf(stderr, "%.11f\n", exec_time);
+
+    free(current_set);
 
     /* fastest way would be to print the tree as we build it */
     dump_tree(root);
