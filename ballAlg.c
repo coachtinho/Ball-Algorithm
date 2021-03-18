@@ -1,5 +1,4 @@
 #include <omp.h>
-#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
@@ -107,18 +106,18 @@ double inner_product(double *p1, double *p2)
 }
 
 /* Multiplies p1 with constant */
-void mul_point(double *p1, double constant)
+void mul_point(double *p1, double constant, double *result)
 {
     long i;
 
     for (i = 0; i < n_dims; i++)
     {
-        p1[i] *= constant;
+        result[i] = p1[i] * constant;
     }
 }
 
-/* TODO: We can optimize this by only computing (b - a) once */
-void project(double *p, double *a, double *b, double *result)
+/* Projects p onto ab */
+void project(double *p, double *a, double *b_a, double *result)
 {
     double *auxiliary = (double *)malloc(n_dims * sizeof(double));
     assert(auxiliary);
@@ -126,14 +125,13 @@ void project(double *p, double *a, double *b, double *result)
 
     /* Numerator of formula */
     sub_points(p, a, result);
-    sub_points(b, a, auxiliary);
-    numerator = inner_product(result, auxiliary);
+    numerator = inner_product(result, b_a);
 
     /* Denominator of formula */
-    denominator = inner_product(auxiliary, auxiliary);
+    denominator = inner_product(b_a, b_a);
 
     fraction = numerator / denominator;
-    mul_point(auxiliary, fraction);
+    mul_point(b_a, fraction, auxiliary);
     add_points(auxiliary, a, result);
 
     free(auxiliary);
@@ -158,7 +156,7 @@ int less_than(double *p1, double *p2)
         {
             return 1;
         }
-        else if (p1[i] >= p2[i])
+        else if (p1[i] > p2[i])
         {
             return 0;
         }
@@ -260,8 +258,6 @@ node_t *build_tree(double **pts, long l, long r)
         print_point(pts[i], n_dims);
     }
 #endif
-    double *a, *b;
-    
     node_t *node = (node_t *) malloc(sizeof(node_t));
     assert(node);
 
@@ -279,8 +275,15 @@ node_t *build_tree(double **pts, long l, long r)
         node->R = NULL;
         return node;
     }
+    double *a, *b;
+    double *b_a = (double*) malloc(n_dims * sizeof(double));
+    assert(b_a);
+    
 
     get_furthest_points(pts, l, r, &a, &b);
+
+    /* Compute b - a */
+    sub_points(b, a, b_a);
 
 #ifdef DEBUG
     printf("a = ");
@@ -290,13 +293,14 @@ node_t *build_tree(double **pts, long l, long r)
 #endif
 
     /* Project points onto ab */
-    double **projections = (double **)malloc((r - l + 1) * sizeof(double *));
-    double *proj = (double *)malloc((r - l + 1) * n_dims * sizeof(double));
+    double **projections = (double **) malloc((r - l + 1) * sizeof(double *));
+    double *proj = (double *) malloc((r - l + 1) * n_dims * sizeof(double));
     for (long i = l; i < r + 1; i++)
     {
-        projections[i - l] = proj + (i - l) * n_dims;
-        project(pts[i], a, b, projections[i - l]);
+        projections[i - l] = &proj[(i - l) * n_dims];
+        project(pts[i], a, b_a, projections[i - l]);
     }
+    free(b_a);
 
 #ifdef DEBUG
     for (long i = 0; i < r - l + 1; i++)
@@ -381,6 +385,7 @@ int main(int argc, char *argv[])
 
     exec_time = -omp_get_wtime();
     double **pts = get_points(argc, argv, &n_dims, &n_points);
+    double *to_free = *pts;
 
     node_t *root = build_tree(pts, 0, n_points - 1);
 
@@ -391,5 +396,6 @@ int main(int argc, char *argv[])
     dump_tree(root);
     free_tree(root);
 
+    free(to_free);
     free(pts);
 }
