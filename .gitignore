@@ -1,6 +1,7 @@
 *.o
 ballQuery
 ballAlg
+ballAlg-omp
 compile_flags.txt
 .vscode/
 Visualizer/.idea
