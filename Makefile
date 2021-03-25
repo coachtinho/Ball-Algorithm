@@ -3,12 +3,12 @@ OBJS = $(SOURCES:%.c=%.o)
 CC = gcc
 
 ifdef DEBUG
-CFLAGS = -Wall -O3 -g -DDEBUG
+CFLAGS = -Wall -O3 -g -DDEBUG -fopenmp
 else
-CFLAGS = -Wall -O3
+CFLAGS = -Wall -O3 -fopenmp
 endif
 
-LDFLAGS = -fopenmp -lm
+LDFLAGS = -lm
 SERIAL = ballAlg
 OMP = ballAlg-omp
 TARGETS = $(SERIAL) $(OMP) ballQuery

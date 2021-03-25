@@ -41,12 +41,12 @@ void mean(double *pt1, double *pt2, double *mean)
 
 void get_furthest_points(double **pts, long l, long r, double **a, double **b)
 {
-
     long i;
     double dist, max_distance = 0.0;
 
     /* Lock b as first point in set and find a */
     *b = pts[l];
+
     for (i = l + 1; i < r + 1; i++)
     {
         if ((dist = distance(*b, pts[i])) > max_distance)
@@ -295,6 +295,7 @@ node_t *build_tree(double **pts, long l, long r)
     /* Project points onto ab */
     double **projections = (double **) malloc((r - l + 1) * sizeof(double *));
     double *proj = (double *) malloc((r - l + 1) * n_dims * sizeof(double));
+#pragma omp parallel for
     for (long i = l; i < r + 1; i++)
     {
         projections[i - l] = &proj[(i - l) * n_dims];
@@ -327,14 +328,17 @@ node_t *build_tree(double **pts, long l, long r)
     free(proj);
 
     /* Compute radius */
+    double radius = 0.0;
+#pragma omp parallel for reduction(max: radius)
     for (long i = l; i < r + 1; i++)
     {
         double dist = distance(node->center, pts[i]);
-        if (dist > node->radius)
+        if (dist > radius)
         {
-            node->radius = dist;
+            radius = dist;
         }
     }
+    node->radius = radius;
 
     node->L = build_tree(pts, l, l + split_index);
     node->R = build_tree(pts, l + split_index + 1, r);
