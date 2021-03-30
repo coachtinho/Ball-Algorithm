@@ -36,3 +36,6 @@ $(OBJS):
 clean:
 	@echo Cleaning...
 	rm -f $(OBJS) $(TARGETS)
+
+test: $(TARGETS)
+	./test.sh

@@ -9,3 +9,6 @@ Visualizer/venv
 projections.csv
 pts.csv
 Visualizer/projection.png
+*.mine
+*.tree
+tests/log
