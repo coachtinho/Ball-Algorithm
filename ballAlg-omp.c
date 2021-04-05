@@ -6,6 +6,8 @@
 #include <string.h>
 #include "gen_points.h"
 
+#define PAR_THRESHOLD 20000 // minimum number of point for parallelization to occur
+
 int n_dims;
 long n_points;
 long current_id = 0;
@@ -295,7 +297,7 @@ node_t *build_tree(double **pts, long l, long r)
     /* Project points onto ab */
     double **projections = (double **) malloc((r - l + 1) * sizeof(double *));
     double *proj = (double *) malloc((r - l + 1) * n_dims * sizeof(double));
-#pragma omp parallel for
+#pragma omp parallel for if (r - l + 1 > PAR_THRESHOLD)
     for (long i = l; i < r + 1; i++)
     {
         projections[i - l] = &proj[(i - l) * n_dims];
@@ -329,7 +331,7 @@ node_t *build_tree(double **pts, long l, long r)
 
     /* Compute radius */
     double radius = 0.0;
-#pragma omp parallel for reduction(max: radius)
+#pragma omp parallel for reduction(max: radius) if (r - l + 1 > PAR_THRESHOLD)
     for (long i = l; i < r + 1; i++)
     {
         double dist = distance(node->center, pts[i]);
