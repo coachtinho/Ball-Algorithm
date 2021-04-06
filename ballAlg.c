@@ -390,7 +390,7 @@ int main(int argc, char *argv[])
     node_t *root = build_tree(pts, 0, n_points - 1);
 
     exec_time += omp_get_wtime();
-    fprintf(stderr, "%.11f\n", exec_time);
+    fprintf(stderr, "%.1f\n", exec_time);
 
     /* fastest way would be to print the tree as we build it */
     dump_tree(root);

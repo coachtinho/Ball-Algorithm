@@ -17,5 +17,5 @@ echo "Seq time: $SEQ_TIME";
 OMP_TIME=$(OMP_NUM_THREADS=$NUM_THREADS ./ballAlg-omp $ARGS 2>&1 > /dev/null);
 echo "OpenMP time: $OMP_TIME";
 
-OMP_SPEEDUP=$(echo "scale=11; $SEQ_TIME/$OMP_TIME" | bc);
+OMP_SPEEDUP=$(echo "scale=6; $SEQ_TIME/$OMP_TIME" | bc);
 echo "OpenMP speedup: $OMP_SPEEDUP";
