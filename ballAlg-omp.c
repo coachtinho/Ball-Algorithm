@@ -46,10 +46,15 @@ void get_furthest_points(double **pts, long l, long r, double **a, double **b)
     long i;
     double dist, max_distance = 0.0;
 
-    /* Lock b as first point in set and find a */
+    /* finds first point relative to the original set */
     *b = pts[l];
-
     for (i = l + 1; i < r + 1; i++)
+    {
+        *b = pts[i] < *b ? pts[i] : *b;
+    }
+
+    /* Lock b as first point in set and find a */
+    for (i = l; i < r + 1; i++)
     {
         if ((dist = distance(*b, pts[i])) > max_distance)
         {
@@ -260,13 +265,13 @@ node_t *build_tree(double **pts, long l, long r)
         print_point(pts[i], n_dims);
     }
 #endif
-    node_t *node = (node_t *) malloc(sizeof(node_t));
+    node_t *node = (node_t *)malloc(sizeof(node_t));
     assert(node);
 
     node->id = current_id++;
     node->radius = 0.0;
 
-    node->center = (double *) malloc(n_dims * sizeof(double));
+    node->center = (double *)malloc(n_dims * sizeof(double));
     assert(node->center);
 
     if (r - l == 0)
@@ -278,9 +283,8 @@ node_t *build_tree(double **pts, long l, long r)
         return node;
     }
     double *a, *b;
-    double *b_a = (double*) malloc(n_dims * sizeof(double));
+    double *b_a = (double *)malloc(n_dims * sizeof(double));
     assert(b_a);
-    
 
     get_furthest_points(pts, l, r, &a, &b);
 
@@ -295,8 +299,8 @@ node_t *build_tree(double **pts, long l, long r)
 #endif
 
     /* Project points onto ab */
-    double **projections = (double **) malloc((r - l + 1) * sizeof(double *));
-    double *proj = (double *) malloc((r - l + 1) * n_dims * sizeof(double));
+    double **projections = (double **)malloc((r - l + 1) * sizeof(double *));
+    double *proj = (double *)malloc((r - l + 1) * n_dims * sizeof(double));
 #pragma omp parallel for if (r - l + 1 > PAR_THRESHOLD)
     for (long i = l; i < r + 1; i++)
     {
@@ -331,7 +335,8 @@ node_t *build_tree(double **pts, long l, long r)
 
     /* Compute radius */
     double radius = 0.0;
-#pragma omp parallel for reduction(max: radius) if (r - l + 1 > PAR_THRESHOLD)
+#pragma omp parallel for reduction(max \
+                                   : radius) if (r - l + 1 > PAR_THRESHOLD)
     for (long i = l; i < r + 1; i++)
     {
         double dist = distance(node->center, pts[i]);
@@ -365,7 +370,7 @@ void print_node(node_t *node)
     {
         printf(" %lf", node->center[i]);
     }
-    printf("\n");
+    printf(" \n");
 }
 
 void dump_tree(node_t *root)
