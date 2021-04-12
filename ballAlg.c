@@ -125,8 +125,7 @@ void mul_point(double *p1, double constant, double *result)
 /* Projects p onto ab */
 void project(double *p, double *a, double *b_a, double *result)
 {
-    double *auxiliary = (double *)malloc(n_dims * sizeof(double));
-    assert(auxiliary);
+    double auxiliary[n_dims];
     double numerator, denominator, fraction;
 
     /* Numerator of formula */
@@ -139,8 +138,6 @@ void project(double *p, double *a, double *b_a, double *result)
     fraction = numerator / denominator;
     mul_point(b_a, fraction, auxiliary);
     add_points(auxiliary, a, result);
-
-    free(auxiliary);
 }
 
 /**************************************************************************************
@@ -264,6 +261,7 @@ node_t *build_tree(double **pts, long l, long r)
         print_point(pts[i], n_dims);
     }
 #endif
+
     node_t *node = (node_t *)malloc(sizeof(node_t));
     assert(node);
 
