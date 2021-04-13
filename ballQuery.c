@@ -60,7 +60,7 @@ long hash_get_index(long id)
     for(h = hash[i]; h != NULL && h->id != id; h = h->next);
 
     if(h == NULL){
-	printf("Id %d not found?!\n", id);
+	printf("Id %ld not found?!\n", id);
 	exit(30);
     }
 

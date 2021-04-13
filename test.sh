@@ -12,7 +12,7 @@ TESTS_PATH="tests"
 # Set the path to the folder where the logs are going to be stored
 LOG_FOLDER="log"
 # Set the path to the program from the tests folder
-PROG="../ballAlg"
+PROG="../ballAlg-omp"
 QUERY="../ballQuery"
 #
 # =*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*

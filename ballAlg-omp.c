@@ -7,6 +7,7 @@
 #include "gen_points.h"
 
 #define PAR_THRESHOLD 20000 // minimum number of point for parallelization to occur
+#define MAX_NESTING_LEVEL 10 // maximum number of levels of nested parallelism
 
 int n_dims;
 long n_points;
@@ -265,6 +266,7 @@ node_t *build_tree(double **pts, long l, long r)
     node_t *node = (node_t *)malloc(sizeof(node_t));
     assert(node);
 
+#pragma omp critical
     node->id = current_id++;
     node->radius = 0.0;
 
@@ -298,7 +300,7 @@ node_t *build_tree(double **pts, long l, long r)
     /* Project points onto ab */
     double **projections = (double **)malloc((r - l + 1) * sizeof(double *));
     double *proj = (double *)malloc((r - l + 1) * n_dims * sizeof(double));
-#pragma omp parallel for if (r - l + 1 > PAR_THRESHOLD)
+/* #pragma omp parallel for if (r - l + 1 > PAR_THRESHOLD) */
     for (long i = l; i < r + 1; i++)
     {
         projections[i - l] = &proj[(i - l) * n_dims];
@@ -332,8 +334,7 @@ node_t *build_tree(double **pts, long l, long r)
 
     /* Compute radius */
     double radius = 0.0;
-#pragma omp parallel for reduction(max \
-                                   : radius) if (r - l + 1 > PAR_THRESHOLD)
+/* #pragma omp parallel for reduction(max:radius) if (r - l + 1 > PAR_THRESHOLD) */
     for (long i = l; i < r + 1; i++)
     {
         double dist = distance(node->center, pts[i]);
@@ -344,8 +345,13 @@ node_t *build_tree(double **pts, long l, long r)
     }
     node->radius = radius;
 
-    node->L = build_tree(pts, l, l + split_index);
-    node->R = build_tree(pts, l + split_index + 1, r);
+#pragma omp parallel
+#pragma omp single
+    {
+        #pragma omp task
+        node->L = build_tree(pts, l, l + split_index);
+        node->R = build_tree(pts, l + split_index + 1, r);
+    }
 
     return node;
 }
@@ -391,6 +397,7 @@ int main(int argc, char *argv[])
 {
     double exec_time;
 
+    /* omp_set_nested(MAX_NESTING_LEVEL); */
     exec_time = -omp_get_wtime();
     double **pts = get_points(argc, argv, &n_dims, &n_points);
     double *to_free = *pts;
@@ -400,7 +407,6 @@ int main(int argc, char *argv[])
     exec_time += omp_get_wtime();
     fprintf(stderr, "%.1f\n", exec_time);
 
-    /* fastest way would be to print the tree as we build it */
     dump_tree(root);
     free_tree(root);
 
