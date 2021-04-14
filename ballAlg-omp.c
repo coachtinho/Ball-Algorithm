@@ -11,6 +11,7 @@
 int n_dims;
 long n_points;
 long current_id = 0;
+long max_depth = 0;
 
 FILE *ptsOutputFile;
 FILE *projOutputFile;
@@ -23,6 +24,8 @@ typedef struct _node
     struct _node *L;
     struct _node *R;
 } node_t;
+
+#pragma region math
 
 double distance(double *pt1, double *pt2)
 {
@@ -141,9 +144,9 @@ void project(double *p, double *a, double *b_a, double *result)
     add_points(auxiliary, a, result);
 }
 
-/**************************************************************************************
- * QUICKSELECT
- * ***********************************************************************************/
+#pragma endregion
+
+#pragma region qselect
 
 #define SWAP(x, y)         \
     {                      \
@@ -220,10 +223,6 @@ double *qselect(double **pts, double **projs, long l, long r, long k, long offse
     }
 }
 
-/**************************************************************************************
- * END OF QUICKSELECT
- * ***********************************************************************************/
-
 /* Computes the median point of a set of points in a line */
 long median(double **pts, double **projs, long l, long r, double *center_pt)
 {
@@ -253,19 +252,24 @@ long median(double **pts, double **projs, long l, long r, double *center_pt)
     return k;
 }
 
-node_t *build_tree(double **pts, long l, long r)
+#pragma endregion
+
+node_t *build_tree(double **pts, long l, long r, long depth)
 {
-#ifdef DEBUG
-    printf("l = %ld; r = %ld\n", l, r);
-    for (long i = l; i < r + 1; i++)
+    double exec_time = 0.0;
+    if (depth < max_depth)
     {
-        print_point(pts[i], n_dims);
+        exec_time = -omp_get_wtime();
     }
-#endif
+
     node_t *node = (node_t *)malloc(sizeof(node_t));
     assert(node);
 
-    node->id = current_id++;
+    node->id = current_id;
+
+#pragma omp atomic
+    current_id++;
+
     node->radius = 0.0;
 
     node->center = (double *)malloc(n_dims * sizeof(double));
@@ -288,17 +292,10 @@ node_t *build_tree(double **pts, long l, long r)
     /* Compute b - a */
     sub_points(b, a, b_a);
 
-#ifdef DEBUG
-    printf("a = ");
-    print_point(a, n_dims);
-    printf("b = ");
-    print_point(b, n_dims);
-#endif
-
     /* Project points onto ab */
     double **projections = (double **)malloc((r - l + 1) * sizeof(double *));
     double *proj = (double *)malloc((r - l + 1) * n_dims * sizeof(double));
-#pragma omp parallel for if (r - l + 1 > PAR_THRESHOLD)
+
     for (long i = l; i < r + 1; i++)
     {
         projections[i - l] = &proj[(i - l) * n_dims];
@@ -306,34 +303,14 @@ node_t *build_tree(double **pts, long l, long r)
     }
     free(b_a);
 
-#ifdef DEBUG
-    for (long i = 0; i < r - l + 1; i++)
-    {
-        printf("projection = ");
-        print_point(projections[i], n_dims);
-    }
-#endif
-
     /* Find median point and split; 2 in 1 GIGA FAST */
     long split_index = median(pts, projections, l, r, node->center);
-
-#ifdef DEBUG
-    for (long i = 0; i < r - l + 1; i++)
-    {
-        printf("sorted projection = ");
-        print_point(projections[i], n_dims);
-    }
-    printf("center = ");
-    print_point(center, n_dims);
-#endif
 
     free(projections);
     free(proj);
 
     /* Compute radius */
     double radius = 0.0;
-#pragma omp parallel for reduction(max \
-                                   : radius) if (r - l + 1 > PAR_THRESHOLD)
     for (long i = l; i < r + 1; i++)
     {
         double dist = distance(node->center, pts[i]);
@@ -344,11 +321,26 @@ node_t *build_tree(double **pts, long l, long r)
     }
     node->radius = radius;
 
-    node->L = build_tree(pts, l, l + split_index);
-    node->R = build_tree(pts, l + split_index + 1, r);
+    if (depth >= max_depth)
+    {
+        node->L = build_tree(pts, l, l + split_index, depth + 1);
+        node->R = build_tree(pts, l + split_index + 1, r, depth + 1);
+    }
+    else
+    {
+        exec_time += omp_get_wtime();
+        printf("Hello from thread %d, launching two tasks at depth %ld. It took me %.1f to process this node\n", omp_get_thread_num(), depth, exec_time);
+#pragma omp task
+        node->L = build_tree(pts, l, l + split_index, depth + 1);
+#pragma omp task
+        node->R = build_tree(pts, l + split_index + 1, r, depth + 1);
+#pragma omp taskwait
+    }
 
     return node;
 }
+
+#pragma region print
 
 void print_node(node_t *node)
 {
@@ -387,21 +379,30 @@ void free_tree(node_t *root)
     free(root);
 }
 
+#pragma endregion print
+
 int main(int argc, char *argv[])
 {
-    double exec_time;
-
-    exec_time = -omp_get_wtime();
+    double exec_time = -omp_get_wtime();
     double **pts = get_points(argc, argv, &n_dims, &n_points);
     double *to_free = *pts;
+    node_t *root;
 
-    node_t *root = build_tree(pts, 0, n_points - 1);
+    max_depth = (int)log2(omp_get_max_threads());
 
+    printf("%ld\n", max_depth);
+
+#pragma omp parallel
+#pragma omp single
+    {
+        printf("number of threads in team = %d\n", omp_get_num_threads());
+#pragma omp task
+        root = build_tree(pts, 0, n_points - 1, 0);
+    }
     exec_time += omp_get_wtime();
     fprintf(stderr, "%.1f\n", exec_time);
 
-    /* fastest way would be to print the tree as we build it */
-    dump_tree(root);
+    //dump_tree(root);
     free_tree(root);
 
     free(to_free);
