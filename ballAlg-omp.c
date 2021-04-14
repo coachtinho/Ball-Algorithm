@@ -6,12 +6,13 @@
 #include <string.h>
 #include "gen_points.h"
 
-#define PAR_THRESHOLD 20000 // minimum number of point for parallelization to occur
+#define PAR_THRESHOLD 20000  // minimum number of point for parallelization to occur
 #define MAX_NESTING_LEVEL 10 // maximum number of levels of nested parallelism
 
 int n_dims;
 long n_points;
 long current_id = 0;
+omp_lock_t id_lock;
 long max_depth = 0;
 
 FILE *ptsOutputFile;
@@ -257,19 +258,22 @@ long median(double **pts, double **projs, long l, long r, double *center_pt)
 
 node_t *build_tree(double **pts, long l, long r, long depth)
 {
+
+#ifdef DEBUG
     double exec_time = 0.0;
     if (depth < max_depth)
     {
         exec_time = -omp_get_wtime();
     }
+#endif
 
     node_t *node = (node_t *)malloc(sizeof(node_t));
     assert(node);
 
+    omp_set_lock(&id_lock);
     node->id = current_id;
-
-#pragma omp atomic
     current_id++;
+    omp_unset_lock(&id_lock);
 
     node->radius = 0.0;
 
@@ -329,13 +333,17 @@ node_t *build_tree(double **pts, long l, long r, long depth)
     }
     else
     {
+#ifdef DEBUG
         exec_time += omp_get_wtime();
         printf("Hello from thread %d, launching two tasks at depth %ld. It took me %.1f to process this node\n", omp_get_thread_num(), depth, exec_time);
+#endif
+#pragma omp taskgroup
+        {
 #pragma omp task
-        node->L = build_tree(pts, l, l + split_index, depth + 1);
+            node->L = build_tree(pts, l, l + split_index, depth + 1);
 #pragma omp task
-        node->R = build_tree(pts, l + split_index + 1, r, depth + 1);
-#pragma omp taskwait
+            node->R = build_tree(pts, l + split_index + 1, r, depth + 1);
+        }
     }
 
     return node;
@@ -389,21 +397,26 @@ int main(int argc, char *argv[])
     double *to_free = *pts;
     node_t *root;
 
+    omp_init_lock(&id_lock);
     max_depth = (int)log2(omp_get_max_threads());
 
+#ifdef DEBUG
     printf("%ld\n", max_depth);
+#endif
 
 #pragma omp parallel
 #pragma omp single
     {
+#ifdef DEBUG
         printf("number of threads in team = %d\n", omp_get_num_threads());
+#endif
 #pragma omp task
         root = build_tree(pts, 0, n_points - 1, 0);
     }
     exec_time += omp_get_wtime();
     fprintf(stderr, "%.1f\n", exec_time);
 
-    //dump_tree(root);
+    dump_tree(root);
     free_tree(root);
 
     free(to_free);
