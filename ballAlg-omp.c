@@ -29,6 +29,15 @@ typedef struct _node
 
 #pragma region math
 
+double quick_distance(double *pt1, double *pt2)
+{
+    double dist = 0.0;
+
+    for (int d = 0; d < n_dims; d++)
+        dist += (pt1[d] - pt2[d]) * (pt1[d] - pt2[d]);
+    return dist;
+}
+
 double distance(double *pt1, double *pt2)
 {
     double dist = 0.0;
@@ -61,7 +70,7 @@ void get_furthest_points(double **pts, long l, long r, double **a, double **b)
     /* Lock b as first point in set and find a */
     for (i = l; i < r + 1; i++)
     {
-        if ((dist = distance(*b, pts[i])) > max_distance)
+        if ((dist = quick_distance(*b, pts[i])) > max_distance)
         {
             *a = pts[i];
             max_distance = dist;
@@ -73,7 +82,7 @@ void get_furthest_points(double **pts, long l, long r, double **a, double **b)
     /* Find b */
     for (i = l; i < r + 1; i++)
     {
-        if ((dist = distance(*a, pts[i])) > max_distance)
+        if ((dist = quick_distance(*a, pts[i])) > max_distance)
         {
             *b = pts[i];
             max_distance = dist;
@@ -129,21 +138,14 @@ void mul_point(double *p1, double constant, double *result)
 }
 
 /* Projects p onto ab */
-void project(double *p, double *a, double *b_a, double *result)
+void project(double *p, double *a, double *b_a, double* common_factor, double *result)
 {
-    double auxiliary[n_dims];
-    double numerator, denominator, fraction;
+    double product;
 
-    /* Numerator of formula */
     sub_points(p, a, result);
-    numerator = inner_product(result, b_a);
+    product = inner_product(result, common_factor);
 
-    /* Denominator of formula */
-    denominator = inner_product(b_a, b_a);
-
-    fraction = numerator / denominator;
-    mul_point(b_a, fraction, auxiliary);
-    add_points(auxiliary, a, result);
+    mul_point(b_a, product, result);
 }
 
 #pragma endregion
@@ -289,13 +291,15 @@ node_t *build_tree(double **pts, long l, long r, long depth)
         return node;
     }
     double *a, *b;
-    double *b_a = (double *)malloc(n_dims * sizeof(double));
-    assert(b_a);
 
     get_furthest_points(pts, l, r, &a, &b);
 
-    /* Compute b - a */
+    /* Compute common factors to all projections */
+    double b_a[n_dims];
     sub_points(b, a, b_a);
+    double denominator = inner_product(b_a, b_a);
+    double common_factor[n_dims];
+    mul_point(b_a, 1 / denominator, common_factor);
 
     /* Project points onto ab */
     double **projections = (double **)malloc((r - l + 1) * sizeof(double *));
@@ -304,12 +308,13 @@ node_t *build_tree(double **pts, long l, long r, long depth)
     for (long i = l; i < r + 1; i++)
     {
         projections[i - l] = &proj[(i - l) * n_dims];
-        project(pts[i], a, b_a, projections[i - l]);
+        project(pts[i], a, b_a, common_factor, projections[i - l]);
     }
-    free(b_a);
 
     /* Find median point and split; 2 in 1 GIGA FAST */
     long split_index = median(pts, projections, l, r, node->center);
+
+    add_points(node->center, a, node->center);
 
     free(projections);
     free(proj);
@@ -398,6 +403,8 @@ int main(int argc, char *argv[])
     node_t *root;
 
     omp_init_lock(&id_lock);
+
+    //TODO: FIX THIS FOR THE CASES WHERE OMP_NUM_THREADS IS NOT A POWER OF 2
     max_depth = (int)log2(omp_get_max_threads());
 
 #ifdef DEBUG

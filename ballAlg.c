@@ -22,6 +22,17 @@ typedef struct _node
     struct _node *R;
 } node_t;
 
+#pragma region math
+
+double quick_distance(double *pt1, double *pt2)
+{
+    double dist = 0.0;
+
+    for (int d = 0; d < n_dims; d++)
+        dist += (pt1[d] - pt2[d]) * (pt1[d] - pt2[d]);
+    return dist;
+}
+
 double distance(double *pt1, double *pt2)
 {
     double dist = 0.0;
@@ -55,7 +66,7 @@ void get_furthest_points(double **pts, long l, long r, double **a, double **b)
     /* Lock b as first point in set and find a */
     for (i = l; i < r + 1; i++)
     {
-        if ((dist = distance(*b, pts[i])) > max_distance)
+        if ((dist = quick_distance(*b, pts[i])) > max_distance)
         {
             *a = pts[i];
             max_distance = dist;
@@ -67,7 +78,7 @@ void get_furthest_points(double **pts, long l, long r, double **a, double **b)
     /* Find b */
     for (i = l; i < r + 1; i++)
     {
-        if ((dist = distance(*a, pts[i])) > max_distance)
+        if ((dist = quick_distance(*a, pts[i])) > max_distance)
         {
             *b = pts[i];
             max_distance = dist;
@@ -123,26 +134,19 @@ void mul_point(double *p1, double constant, double *result)
 }
 
 /* Projects p onto ab */
-void project(double *p, double *a, double *b_a, double *result)
+void project(double *p, double *a, double *b_a, double* common_factor, double *result)
 {
-    double auxiliary[n_dims];
-    double numerator, denominator, fraction;
+    double product;
 
-    /* Numerator of formula */
     sub_points(p, a, result);
-    numerator = inner_product(result, b_a);
+    product = inner_product(result, common_factor);
 
-    /* Denominator of formula */
-    denominator = inner_product(b_a, b_a);
-
-    fraction = numerator / denominator;
-    mul_point(b_a, fraction, auxiliary);
-    add_points(auxiliary, a, result);
+    mul_point(b_a, product, result);
 }
 
-/**************************************************************************************
- * QUICKSELECT
- * ***********************************************************************************/
+#pragma endregion
+
+#pragma region qselect
 
 #define SWAP(x, y)         \
     {                      \
@@ -219,10 +223,6 @@ double *qselect(double **pts, double **projs, long l, long r, long k, long offse
     }
 }
 
-/**************************************************************************************
- * END OF QUICKSELECT
- * ***********************************************************************************/
-
 /* Computes the median point of a set of points in a line */
 long median(double **pts, double **projs, long l, long r, double *center_pt)
 {
@@ -252,16 +252,10 @@ long median(double **pts, double **projs, long l, long r, double *center_pt)
     return k;
 }
 
+#pragma endregion
+
 node_t *build_tree(double **pts, long l, long r)
 {
-#ifdef DEBUG
-    printf("l = %ld; r = %ld\n", l, r);
-    for (long i = l; i < r + 1; i++)
-    {
-        print_point(pts[i], n_dims);
-    }
-#endif
-
     node_t *node = (node_t *)malloc(sizeof(node_t));
     assert(node);
 
@@ -280,20 +274,15 @@ node_t *build_tree(double **pts, long l, long r)
         return node;
     }
     double *a, *b;
-    double *b_a = (double *)malloc(n_dims * sizeof(double));
-    assert(b_a);
 
     get_furthest_points(pts, l, r, &a, &b);
 
-    /* Compute b - a */
+    /* Compute common factors to all projections */
+    double b_a[n_dims];
     sub_points(b, a, b_a);
-
-#ifdef DEBUG
-    printf("a = ");
-    print_point(a, n_dims);
-    printf("b = ");
-    print_point(b, n_dims);
-#endif
+    double denominator = inner_product(b_a, b_a);
+    double common_factor[n_dims];
+    mul_point(b_a, 1/denominator, common_factor);
 
     /* Project points onto ab */
     double **projections = (double **)malloc((r - l + 1) * sizeof(double *));
@@ -301,30 +290,13 @@ node_t *build_tree(double **pts, long l, long r)
     for (long i = l; i < r + 1; i++)
     {
         projections[i - l] = &proj[(i - l) * n_dims];
-        project(pts[i], a, b_a, projections[i - l]);
+        project(pts[i], a, b_a, common_factor, projections[i - l]);
     }
-    free(b_a);
-
-#ifdef DEBUG
-    for (long i = 0; i < r - l + 1; i++)
-    {
-        printf("projection = ");
-        print_point(projections[i], n_dims);
-    }
-#endif
 
     /* Find median point and split; 2 in 1 GIGA FAST */
     long split_index = median(pts, projections, l, r, node->center);
 
-#ifdef DEBUG
-    for (long i = 0; i < r - l + 1; i++)
-    {
-        printf("sorted projection = ");
-        print_point(projections[i], n_dims);
-    }
-    printf("center = ");
-    print_point(center, n_dims);
-#endif
+    add_points(node->center, a, node->center);
 
     free(projections);
     free(proj);
@@ -344,6 +316,8 @@ node_t *build_tree(double **pts, long l, long r)
 
     return node;
 }
+
+#pragma region print
 
 void print_node(node_t *node)
 {
@@ -381,6 +355,8 @@ void free_tree(node_t *root)
     free(root->center);
     free(root);
 }
+
+#pragma endregion
 
 int main(int argc, char *argv[])
 {
