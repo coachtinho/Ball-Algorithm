@@ -9,8 +9,7 @@
 int n_dims;
 long n_points;
 long max_depth = 0;
-
-FILE *ptsOutputFile;
+long diff = 0;
 
 typedef struct _node
 {
@@ -287,14 +286,15 @@ node_t *build_tree(double **pts, double **projections, node_t *nodes, long l, lo
     node->id = id;
     node->radius = 0.0;
 
+    /* It's a leaf*/
     if (r - l == 0)
     {
         memcpy(node->center, pts[l], sizeof(double) * n_dims);
-        node->radius = 0.0;
         node->L = NULL;
         node->R = NULL;
         return node;
     }
+
     double *a, *b;
 
     get_furthest_points(pts, l, r, &a, &b);
@@ -315,6 +315,7 @@ node_t *build_tree(double **pts, double **projections, node_t *nodes, long l, lo
     /* Find median point and split; 2 in 1 GIGA FAST */
     long split_index = median(pts, projections, l, r, node->center);
 
+    /* Since the projection skips summing a at the end it must be done here */
     add_points(node->center, a, node->center);
 
     /* Compute radius */
@@ -327,10 +328,20 @@ node_t *build_tree(double **pts, double **projections, node_t *nodes, long l, lo
         }
     }
 
-    if (depth >= max_depth)
+    if (depth > max_depth)
     {
         node->L = build_tree(pts, projections, nodes, l, l + split_index, depth + 1, id + 1);
-        node->R = build_tree(pts, projections, nodes, l + split_index + 1, r, depth + 1, id + 2 * (l + split_index - l + 1));
+        node->R = build_tree(pts, projections, nodes, l + split_index + 1, r, depth + 1, id + 2 * (split_index + 1));
+    }
+    else if (depth == max_depth && omp_get_thread_num() < diff)
+    {
+#pragma omp taskgroup
+        {
+#pragma omp task
+            node->L = build_tree(pts, projections, nodes, l, l + split_index, depth + 1, id + 1);
+#pragma omp task
+            node->R = build_tree(pts, projections, nodes, l + split_index + 1, r, depth + 1, id + 2 * (split_index + 1));
+        }
     }
     else
     {
@@ -343,7 +354,7 @@ node_t *build_tree(double **pts, double **projections, node_t *nodes, long l, lo
 #pragma omp task
             node->L = build_tree(pts, projections, nodes, l, l + split_index, depth + 1, id + 1);
 #pragma omp task
-            node->R = build_tree(pts, projections, nodes, l + split_index + 1, r, depth + 1, id + 2 * (l + split_index - l + 1));
+            node->R = build_tree(pts, projections, nodes, l + split_index + 1, r, depth + 1, id + 2 * (split_index + 1));
         }
     }
 
@@ -387,8 +398,12 @@ int main(int argc, char *argv[])
     double *to_free = *pts;
     node_t *root;
 
-    //TODO: FIX THIS FOR THE CASES WHERE OMP_NUM_THREADS IS NOT A POWER OF 2
     max_depth = (int)log2(omp_get_max_threads());
+    /* If number of threads isn't a power of 2, the difference between
+     * 2 ^ max_depth and num_threads must be accounted or those threads
+     * won't be used
+     */
+    diff = omp_get_max_threads() - (1 << max_depth);
 
     /* Allocate memory for projections */
     double **projections = (double **)malloc(n_points * sizeof(double *));

@@ -10,8 +10,6 @@ int n_dims;
 long n_points;
 long current_id = 0;
 
-FILE *ptsOutputFile;
-
 typedef struct _node
 {
     long id;
@@ -194,7 +192,6 @@ long median_of_three(double **pts, double **projs, long l, long r)
 long partition(double **pts, double **projs, long l, long r, long pivotIndex)
 {
 
-    /* this is a little slower but it should be fiiiiiiiiiiiiiiiiiiiiiine */
     double *pivotValue = projs[pivotIndex];
 
     SWAP(projs[pivotIndex], projs[r]);
@@ -281,14 +278,15 @@ node_t *build_tree(double **pts, double **projections, node_t *nodes, long l, lo
     node->id = current_id++;
     node->radius = 0.0;
 
+    /* It's a leaf */
     if (r - l == 0)
     {
         memcpy(node->center, pts[l], sizeof(double) * n_dims);
-        node->radius = 0.0;
         node->L = NULL;
         node->R = NULL;
         return node;
     }
+
     double *a, *b;
 
     get_furthest_points(pts, l, r, &a, &b);
@@ -309,6 +307,7 @@ node_t *build_tree(double **pts, double **projections, node_t *nodes, long l, lo
     /* Find median point and split; 2 in 1 GIGA FAST */
     long split_index = median(pts, projections, l, r, node->center);
 
+    /* Since the projection skips summing a at the end it must be done here */
     add_points(node->center, a, node->center);
 
     /* Compute radius */

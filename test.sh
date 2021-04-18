@@ -98,6 +98,20 @@ do
         echo "DIFFERENT"
     else
         echo "EQUAL"
+
+        echo -e "Cleaning...\n "
+        rm expected/${util}.mine
+
+        if [ "$CLEAN" = true ]; then
+            rm $LOG_FOLDER/${util}.log
+        fi
+
+        SUCCESS=$(($SUCCESS + 1))
+        if [ "$COMPACT" = true ]; then
+            clean_lines_up 4
+        fi
+
+        continue
     fi
 
     echo -n "Querying tree... " | tee -a $LOG_FOLDER/${util}.log
