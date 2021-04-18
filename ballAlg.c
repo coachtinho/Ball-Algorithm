@@ -11,7 +11,6 @@ long n_points;
 long current_id = 0;
 
 FILE *ptsOutputFile;
-FILE *projOutputFile;
 
 typedef struct _node
 {
@@ -134,7 +133,7 @@ void mul_point(double *p1, double constant, double *result)
 }
 
 /* Projects p onto ab */
-void project(double *p, double *a, double *b_a, double* common_factor, double *result)
+void project(double *p, double *a, double *b_a, double *common_factor, double *result)
 {
     double product;
 
@@ -171,14 +170,35 @@ int less_than(double *p1, double *p2)
     return 0;
 }
 
-long partition(double **pts, double **projs, long l, long r, long pivotIndex, long offset)
+long median_of_three(double **pts, double **projs, long l, long r)
+{
+    long m = (l + r) / 2;
+    if (less_than(projs[r], projs[l]))
+    {
+        SWAP(projs[r], projs[l]);
+        SWAP(pts[r], pts[l]);
+    }
+    if (less_than(projs[m], projs[l]))
+    {
+        SWAP(projs[m], projs[l]);
+        SWAP(pts[m], pts[l]);
+    }
+    if (less_than(projs[r], projs[m]))
+    {
+        SWAP(projs[r], projs[m]);
+        SWAP(pts[r], pts[m]);
+    }
+    return m;
+}
+
+long partition(double **pts, double **projs, long l, long r, long pivotIndex)
 {
 
     /* this is a little slower but it should be fiiiiiiiiiiiiiiiiiiiiiine */
     double *pivotValue = projs[pivotIndex];
 
     SWAP(projs[pivotIndex], projs[r]);
-    SWAP(pts[pivotIndex + offset], pts[r + offset]);
+    SWAP(pts[pivotIndex], pts[r]);
     long storeIndex = l;
 
     for (long i = l; i < r; i++)
@@ -186,18 +206,18 @@ long partition(double **pts, double **projs, long l, long r, long pivotIndex, lo
         if (less_than(projs[i], pivotValue))
         {
             SWAP(projs[storeIndex], projs[i]);
-            SWAP(pts[storeIndex + offset], pts[i + offset]);
+            SWAP(pts[storeIndex], pts[i]);
             storeIndex++;
         }
     }
 
     SWAP(projs[r], projs[storeIndex]);
-    SWAP(pts[r + offset], pts[storeIndex + offset]);
+    SWAP(pts[r], pts[storeIndex]);
 
     return storeIndex;
 }
 
-double *qselect(double **pts, double **projs, long l, long r, long k, long offset)
+double *qselect(double **pts, double **projs, long l, long r, long k)
 {
     /* This way of doing it uses less stack */
     while (1)
@@ -206,8 +226,8 @@ double *qselect(double **pts, double **projs, long l, long r, long k, long offse
         {
             return projs[l];
         }
-        long pivotIndex = l + rand() % (r - l + 1);
-        pivotIndex = partition(pts, projs, l, r, pivotIndex, offset);
+        long pivotIndex = median_of_three(pts, projs, l, r);
+        pivotIndex = partition(pts, projs, l, r, pivotIndex);
         if (k == pivotIndex)
         {
             return projs[k];
@@ -231,22 +251,22 @@ long median(double **pts, double **projs, long l, long r, double *center_pt)
 
     if (projs_size % 2 != 0)
     {
-        memcpy(center_pt, qselect(pts, projs, 0, projs_size - 1, k, l), sizeof(double) * n_dims);
+        memcpy(center_pt, qselect(pts, projs, l, r, k + l), sizeof(double) * n_dims);
     }
     else
     {
-        qselect(pts, projs, 0, projs_size - 1, k, l);
+        qselect(pts, projs, l, r, k + l);
 
         /* Finds point immediately before kth point */
-        double *current = projs[0];
-        for (long i = 1; i < k; i++)
+        double *current = projs[l];
+        for (long i = l + 1; i < k + l; i++)
         {
             if (less_than(current, projs[i]))
             {
                 current = projs[i];
             }
         }
-        mean(current, projs[k], center_pt);
+        mean(current, projs[k + l], center_pt);
     }
     k--;
     return k;
@@ -254,16 +274,12 @@ long median(double **pts, double **projs, long l, long r, double *center_pt)
 
 #pragma endregion
 
-node_t *build_tree(double **pts, long l, long r)
+node_t *build_tree(double **pts, double **projections, node_t *nodes, long l, long r)
 {
-    node_t *node = (node_t *)malloc(sizeof(node_t));
-    assert(node);
+    node_t *node = &nodes[current_id];
 
     node->id = current_id++;
     node->radius = 0.0;
-
-    node->center = (double *)malloc(n_dims * sizeof(double));
-    assert(node->center);
 
     if (r - l == 0)
     {
@@ -282,24 +298,18 @@ node_t *build_tree(double **pts, long l, long r)
     sub_points(b, a, b_a);
     double denominator = inner_product(b_a, b_a);
     double common_factor[n_dims];
-    mul_point(b_a, 1/denominator, common_factor);
+    mul_point(b_a, 1 / denominator, common_factor);
 
     /* Project points onto ab */
-    double **projections = (double **)malloc((r - l + 1) * sizeof(double *));
-    double *proj = (double *)malloc((r - l + 1) * n_dims * sizeof(double));
     for (long i = l; i < r + 1; i++)
     {
-        projections[i - l] = &proj[(i - l) * n_dims];
-        project(pts[i], a, b_a, common_factor, projections[i - l]);
+        project(pts[i], a, b_a, common_factor, projections[i]);
     }
 
     /* Find median point and split; 2 in 1 GIGA FAST */
     long split_index = median(pts, projections, l, r, node->center);
 
     add_points(node->center, a, node->center);
-
-    free(projections);
-    free(proj);
 
     /* Compute radius */
     for (long i = l; i < r + 1; i++)
@@ -311,8 +321,8 @@ node_t *build_tree(double **pts, long l, long r)
         }
     }
 
-    node->L = build_tree(pts, l, l + split_index);
-    node->R = build_tree(pts, l + split_index + 1, r);
+    node->L = build_tree(pts, projections, nodes, l, l + split_index);
+    node->R = build_tree(pts, projections, nodes, l + split_index + 1, r);
 
     return node;
 }
@@ -345,17 +355,6 @@ void dump_tree(node_t *root)
     print_node(root);
 }
 
-void free_tree(node_t *root)
-{
-    if (root->L)
-        free_tree(root->L);
-    if (root->R)
-        free_tree(root->R);
-
-    free(root->center);
-    free(root);
-}
-
 #pragma endregion
 
 int main(int argc, char *argv[])
@@ -366,15 +365,39 @@ int main(int argc, char *argv[])
     double **pts = get_points(argc, argv, &n_dims, &n_points);
     double *to_free = *pts;
 
-    node_t *root = build_tree(pts, 0, n_points - 1);
+    /* Allocate memory for projections */
+    double **projections = (double **)malloc(n_points * sizeof(double *));
+    assert(projections);
+    double *proj = (double *)malloc(n_points * n_dims * sizeof(double));
+    assert(proj);
+
+    for (long i = 0; i < n_points; i++)
+    {
+        projections[i] = &proj[i * n_dims];
+    }
+
+    /* Allocate memory for nodes */
+    node_t *nodes = (node_t *)malloc((2 * n_points - 1) * sizeof(node_t));
+    assert(nodes);
+    double *centers = (double *)malloc((2 * n_points - 1) * n_dims * sizeof(node_t));
+    assert(centers);
+
+    for (long i = 0; i < 2 * n_points - 1; i++)
+    {
+        nodes[i].center = &centers[i * n_dims];
+    }
+
+    node_t *root = build_tree(pts, projections, nodes, 0, n_points - 1);
 
     exec_time += omp_get_wtime();
     fprintf(stderr, "%.1f\n", exec_time);
 
-    /* fastest way would be to print the tree as we build it */
     dump_tree(root);
-    free_tree(root);
 
+    free(nodes);
+    free(centers);
+    free(projections);
+    free(proj);
     free(to_free);
     free(pts);
 }
