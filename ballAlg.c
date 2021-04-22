@@ -281,7 +281,7 @@ node_t *build_tree(double **pts, double **projections, node_t *nodes, long l, lo
     /* It's a leaf */
     if (r - l == 0)
     {
-        memcpy(node->center, pts[l], sizeof(double) * n_dims);
+        node->center = pts[l];
         node->L = NULL;
         node->R = NULL;
         return node;

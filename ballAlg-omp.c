@@ -273,23 +273,15 @@ long median(double **pts, double **projs, long l, long r, double *center_pt)
 node_t *build_tree(double **pts, double **projections, node_t *nodes, long l, long r, long depth, long id)
 {
 
-#ifdef DEBUG
-    double exec_time = 0.0;
-    if (depth < max_depth)
-    {
-        exec_time = -omp_get_wtime();
-    }
-#endif
-
     node_t *node = &nodes[id];
 
     node->id = id;
     node->radius = 0.0;
 
-    /* It's a leaf*/
+    /* It's a leaf */
     if (r - l == 0)
     {
-        memcpy(node->center, pts[l], sizeof(double) * n_dims);
+        node->center = pts[l];
         node->L = NULL;
         node->R = NULL;
         return node;
@@ -328,12 +320,7 @@ node_t *build_tree(double **pts, double **projections, node_t *nodes, long l, lo
         }
     }
 
-    if (depth > max_depth)
-    {
-        node->L = build_tree(pts, projections, nodes, l, l + split_index, depth + 1, id + 1);
-        node->R = build_tree(pts, projections, nodes, l + split_index + 1, r, depth + 1, id + 2 * (split_index + 1));
-    }
-    else if (depth == max_depth && omp_get_thread_num() < diff)
+    if (depth < max_depth || (depth == max_depth && omp_get_thread_num() < diff))
     {
 #pragma omp taskgroup
         {
@@ -345,17 +332,8 @@ node_t *build_tree(double **pts, double **projections, node_t *nodes, long l, lo
     }
     else
     {
-#ifdef DEBUG
-        exec_time += omp_get_wtime();
-        printf("Hello from thread %d, launching two tasks at depth %ld. It took me %.1f to process this node\n", omp_get_thread_num(), depth, exec_time);
-#endif
-#pragma omp taskgroup
-        {
-#pragma omp task
-            node->L = build_tree(pts, projections, nodes, l, l + split_index, depth + 1, id + 1);
-#pragma omp task
-            node->R = build_tree(pts, projections, nodes, l + split_index + 1, r, depth + 1, id + 2 * (split_index + 1));
-        }
+        node->L = build_tree(pts, projections, nodes, l, l + split_index, depth + 1, id + 1);
+        node->R = build_tree(pts, projections, nodes, l + split_index + 1, r, depth + 1, id + 2 * (split_index + 1));
     }
 
     return node;
@@ -424,16 +402,9 @@ int main(int argc, char *argv[])
         nodes[i].center = &centers[i * n_dims];
     }
 
-#ifdef DEBUG
-    printf("%ld\n", max_depth);
-#endif
-
 #pragma omp parallel
 #pragma omp single
     {
-#ifdef DEBUG
-        printf("number of threads in team = %d\n", omp_get_num_threads());
-#endif
 #pragma omp task
         root = build_tree(pts, projections, nodes, 0, n_points - 1, 0, 0);
     }
