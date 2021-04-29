@@ -12,7 +12,7 @@ TESTS_PATH="tests"
 # Set the path to the folder where the logs are going to be stored
 LOG_FOLDER="log"
 # Set the path to the program from the tests folder
-PROG="../ballAlg-omp"
+PROG="../ballAlg-mpi"
 QUERY="../ballQuery"
 #
 # =*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*
@@ -77,7 +77,12 @@ do
     echo -n "Executing program... " | tee -a $LOG_FOLDER/${util}.log
     echo >> $LOG_FOLDER/${util}.log
     rm expected/${util}.mine &> /dev/null
-    $PROG $(cat ${file}) 2>/dev/null | tee -a expected/${util}.mine $LOG_FOLDER/${util}.log > /dev/null
+
+    if [ $(echo $PROG | grep mpi) ]; then
+        mpirun $PROG $(cat ${file}) 2>/dev/null | tee -a expected/${util}.mine $LOG_FOLDER/${util}.log > /dev/null
+    else
+        $PROG $(cat ${file}) 2>/dev/null | tee -a expected/${util}.mine $LOG_FOLDER/${util}.log > /dev/null
+    fi
 
     if [ $? -eq 0 ]; then
         echo "DONE"
