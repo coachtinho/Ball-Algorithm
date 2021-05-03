@@ -2,6 +2,7 @@
 ballQuery
 ballAlg
 ballAlg-omp
+ballAlg-mpi
 compile_flags.txt
 .vscode/
 Visualizer/.idea
