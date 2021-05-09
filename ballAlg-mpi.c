@@ -5,9 +5,12 @@
 #include <assert.h>
 #include <string.h>
 #include "gen_points.h"
+#include <mpi.h>
 
-int n_dims;
+int n_dims, n_procs, me;
 long n_points;
+long base_id;
+MPI_Status status;
 
 typedef struct _node
 {
@@ -353,33 +356,72 @@ void dump_tree(node_t *nodes)
 int main(int argc, char *argv[])
 {
     double exec_time = -omp_get_wtime();
-    double **pts = get_points(argc, argv, &n_dims, &n_points);
-    double *to_free = *pts;
+    MPI_Init(&argc, &argv);
+    MPI_Comm_rank(MPI_COMM_WORLD, &me);
+    MPI_Comm_size(MPI_COMM_WORLD, &n_procs);
+    long max_depth = (int)log2(omp_get_max_threads());
 
-    /* Allocate memory for projections */
-    double **projections = (double **)malloc(n_points * sizeof(double *));
-    double *proj = (double *)malloc(n_points * n_dims * sizeof(double));
-    for (long i = 0; i < n_points; i++)
+    if (me == 0)
     {
-        projections[i] = &proj[i * n_dims];
+        double **pts = get_points(argc, argv, &n_dims, &n_points);
+        double *to_free = *pts;
+
+        /* Allocate memory for projections */
+        double **projections = (double **)malloc(n_points * sizeof(double *));
+        double *proj = (double *)malloc(n_points * n_dims * sizeof(double));
+        for (long i = 0; i < n_points; i++)
+        {
+            projections[i] = &proj[i * n_dims];
+        }
+
+        /* Allocate memory for nodes */
+        node_t *nodes = (node_t *)malloc((n_points / pow(2, (max_depth - 0)) * 2 + (max_depth - 0)) * sizeof(node_t));
+        assert(nodes);
+        double *centers = (double *)malloc((n_points / pow(2, (max_depth - 0)) * 2 + (max_depth - 0)) * n_dims * sizeof(node_t));
+        assert(centers);
+
+        for (long i = 0; i < 2 * n_points - 1; i++)
+        {
+            nodes[i].center = &centers[i * n_dims];
+        }
+        build_tree(pts, projections, nodes, 0, n_points - 1, 0, 0);
+
+        /* Wait for n_processes termination messages */
+
+        /* Time the execution */
+
+        /* send print */
+    }
+    else
+    {
+        /* Wait for set of points */
+
+        /* n_points, depth, id */
+
+        /* check if print message */
+
+        /* if print exit */
+
+        /* if termination wait for set of points */
+
+        /* else */
+
+        /* recv pts */
+
+        /* sizeof(projections) = n_points | sizeof(nodes) =  (n_points  / 2**(max_depth - depth)) * 2 + (max_depth - depth) */
+
+        /* build_tree */
+
+        /* send termination */
     }
 
-    /* Allocate memory for nodes */
-    node_t *nodes = (node_t *)malloc((2 * n_points - 1) * sizeof(node_t));
-    assert(nodes);
-    double *centers = (double *)malloc((2 * n_points - 1) * n_dims * sizeof(node_t));
-    assert(centers);
+    /* wait print */
 
-    for (long i = 0; i < 2 * n_points - 1; i++)
-    {
-        nodes[i].center = &centers[i * n_dims];
-    }
-
-    build_tree(pts, projections, nodes, 0, n_points - 1, 0, 0);
-
+    /* print */
     exec_time += omp_get_wtime();
     fprintf(stderr, "%.1f\n", exec_time);
 
+    /*
     dump_tree(nodes);
 
     free(nodes);
@@ -388,4 +430,6 @@ int main(int argc, char *argv[])
     free(proj);
     free(to_free);
     free(pts);
+    MPI_Finalize();
+    */
 }
