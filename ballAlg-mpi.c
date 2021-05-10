@@ -7,17 +7,32 @@
 #include "gen_points.h"
 #include <mpi.h>
 
-int n_dims, n_procs, me;
+int n_dims, n_procs, id;
 long n_points;
-long base_id;
-MPI_Status status;
+/* MPI_Status status; */
 
 typedef struct _node
 {
     long id;
+    long left;
+    long right;
     double *center;
     double radius;
 } node_t;
+
+typedef struct _list
+{
+    void *item;
+    struct _list *next;
+} list_t;
+
+list_t *add_to_list(list_t *head, void *item) {
+    list_t *new = (list_t*) malloc(sizeof(list_t));
+    new->item = item;
+    new->next = head;
+
+    return new;
+}
 
 #pragma region math
 
@@ -254,7 +269,7 @@ long median(double **pts, double **projs, long l, long r, double *center_pt)
 
         /* Finds point immediately before kth point */
         double *current = projs[l];
-        for (long i = l + 1; i < k + l; i++)
+        for (long i = l + 1; i < l + k; i++)
         {
             if (less_than(current, projs[i]))
             {
@@ -269,18 +284,46 @@ long median(double **pts, double **projs, long l, long r, double *center_pt)
 
 #pragma endregion
 
-void build_tree(double **pts, double **projections, node_t *nodes, long l, long r, long depth, long id)
+node_t *create_node(long id) {
+    node_t *node = (node_t*) malloc(sizeof(node_t));
+    node->id = id;
+    node->center = (double*) malloc(n_dims * sizeof(double));
+    node->radius = 0.0;
+
+    return node;
+}
+
+void free_node(node_t *node) {
+    free(node->center);
+    free(node);
+}
+
+void free_list(list_t *head) {
+    list_t *aux = head;
+
+    while (aux->next) {
+        list_t *t = aux;
+        aux = aux->next;
+        free_node(t->item);
+        free(t);
+    }
+
+    free_node(aux->item);
+    free(aux);
+}
+
+void build_tree(double **pts, list_t **nodes, double **projections, long l, long r, long depth, long id)
 {
 
-    node_t *node = &nodes[id];
-
-    node->id = id;
-    node->radius = 0.0;
+    node_t *node = create_node(id);
 
     /* It's a leaf */
     if (r - l == 0)
     {
-        node->center = pts[l];
+        memcpy(node->center, pts[l], n_dims * sizeof(double));
+        node->left = -1;
+        node->right = -1;
+        *nodes = add_to_list(*nodes, (void*) node);
         return;
     }
 
@@ -316,39 +359,44 @@ void build_tree(double **pts, double **projections, node_t *nodes, long l, long 
             node->radius = dist;
         }
     }
-    build_tree(pts, projections, nodes, l, l + split_index, depth + 1, id + 1);
-    build_tree(pts, projections, nodes, l + split_index + 1, r, depth + 1, id + 2 * (split_index + 1));
+
+    node->left = id + 1;
+    node->right = id + 2 * (split_index + 1);
+
+    /* Add new node to list */
+    *nodes = add_to_list(*nodes, (void*) node);
+
+    build_tree(pts, nodes, projections, l, l + split_index, depth + 1, node->left);
+    build_tree(pts, nodes, projections, l + split_index + 1, r, depth + 1, node->right);
 }
 
 #pragma region print
 
-void print_node(node_t *nodes, long id, long size)
+void print_node(node_t *node)
 {
-    long split = size / 2;
-
-    if (size > 1)
-    {
-        print_node(nodes, id + 1, split);
-        print_node(nodes, id + 2 * split, size - split);
-    }
-
     printf("%ld %ld %ld %lf",
-           id,
-           size > 1 ? id + 1 : -1,
-           size > 1 ? id + 2 * split : -1,
-           nodes[id].radius);
+           node->id,
+           node->left,
+           node->right,
+           node->radius);
 
     for (long i = 0; i < n_dims; i++)
     {
-        printf(" %lf", nodes[id].center[i]);
+        printf(" %lf", node->center[i]);
     }
     printf(" \n");
 }
 
-void dump_tree(node_t *nodes)
+void print_list(list_t *nodes)
+{
+    for (list_t *aux = nodes; aux != NULL; aux = aux->next)
+        print_node((node_t*) aux->item);
+}
+
+void dump_tree(list_t *nodes)
 {
     printf("%d %ld\n", n_dims, 2 * n_points - 1);
-    print_node(nodes, 0, n_points);
+    print_list(nodes);
 }
 
 #pragma endregion print
@@ -356,80 +404,77 @@ void dump_tree(node_t *nodes)
 int main(int argc, char *argv[])
 {
     double exec_time = -omp_get_wtime();
-    MPI_Init(&argc, &argv);
-    MPI_Comm_rank(MPI_COMM_WORLD, &me);
-    MPI_Comm_size(MPI_COMM_WORLD, &n_procs);
-    long max_depth = (int)log2(omp_get_max_threads());
+    /* MPI_Init(&argc, &argv); */
+    /* MPI_Comm_rank(MPI_COMM_WORLD, &id); */
+    /* MPI_Comm_size(MPI_COMM_WORLD, &n_procs); */
+    /* long max_depth = (int)log2(n_procs); */
+    /* If number of threads isn't a power of 2, the difference between
+     * 2 ^ max_depth and num_threads must be accounted or those threads
+     * won't be used
+     */
+    /* long diff = n_procs - (1 << max_depth); */
+    double **pts = get_points(argc, argv, &n_dims, &n_points);
+    double *to_free = *pts;
+    list_t *nodes = NULL;
 
-    if (me == 0)
+    /* Allocate memory for projections */
+    double **projections = (double **)malloc(n_points * sizeof(double *));
+    double *proj = (double *)malloc(n_points * n_dims * sizeof(double));
+    for (long i = 0; i < n_points; i++)
     {
-        double **pts = get_points(argc, argv, &n_dims, &n_points);
-        double *to_free = *pts;
-
-        /* Allocate memory for projections */
-        double **projections = (double **)malloc(n_points * sizeof(double *));
-        double *proj = (double *)malloc(n_points * n_dims * sizeof(double));
-        for (long i = 0; i < n_points; i++)
-        {
-            projections[i] = &proj[i * n_dims];
-        }
-
-        /* Allocate memory for nodes */
-        node_t *nodes = (node_t *)malloc((n_points / pow(2, (max_depth - 0)) * 2 + (max_depth - 0)) * sizeof(node_t));
-        assert(nodes);
-        double *centers = (double *)malloc((n_points / pow(2, (max_depth - 0)) * 2 + (max_depth - 0)) * n_dims * sizeof(node_t));
-        assert(centers);
-
-        for (long i = 0; i < 2 * n_points - 1; i++)
-        {
-            nodes[i].center = &centers[i * n_dims];
-        }
-        build_tree(pts, projections, nodes, 0, n_points - 1, 0, 0);
-
-        /* Wait for n_processes termination messages */
-
-        /* Time the execution */
-
-        /* send print */
-    }
-    else
-    {
-        /* Wait for set of points */
-
-        /* n_points, depth, id */
-
-        /* check if print message */
-
-        /* if print exit */
-
-        /* if termination wait for set of points */
-
-        /* else */
-
-        /* recv pts */
-
-        /* sizeof(projections) = n_points | sizeof(nodes) =  (n_points  / 2**(max_depth - depth)) * 2 + (max_depth - depth) */
-
-        /* build_tree */
-
-        /* send termination */
+        projections[i] = &proj[i * n_dims];
     }
 
-    /* wait print */
+    build_tree(pts, &nodes, projections, 0, n_points - 1, 0, 0);
+
+    /* if (!id) */
+    /* { */
+        /* pts = get_points(argc, argv, &n_dims, &n_points); */
+        /* to_free = *pts; */
+
+        /* build_tree(pts, &nodes, 0, n_points - 1, 0, 0); */
+
+        /* [> Wait for n_processes termination messages <] */
+
+        /* [> Time the execution <] */
+
+        /* [> send print <] */
+    /* } */
+    /* else */
+    /* { */
+        /* [> Wait for set of points <] */
+
+        /* [> n_points, depth, id <] */
+
+        /* [> check if print message <] */
+
+        /* [> if print exit <] */
+
+        /* [> if termination wait for set of points <] */
+
+        /* [> else <] */
+
+        /* [> recv pts <] */
+
+        /* [> sizeof(projections) = n_points | sizeof(nodes) =  (n_points  / 2**(max_depth - depth)) * 2 + (max_depth - depth) <] */
+
+        /* [> build_tree <] */
+
+        /* [> send termination <] */
+    /* } */
+
+    /* MPI_Barrier(MPI_COMM_WORLD); */
 
     /* print */
     exec_time += omp_get_wtime();
+
+
     fprintf(stderr, "%.1f\n", exec_time);
-
-    /*
     dump_tree(nodes);
-
-    free(nodes);
-    free(centers);
+    free_list(nodes);
     free(projections);
     free(proj);
     free(to_free);
     free(pts);
-    MPI_Finalize();
-    */
+    /* MPI_Finalize(); */
 }

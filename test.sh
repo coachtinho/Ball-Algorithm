@@ -79,7 +79,7 @@ do
     rm expected/${util}.mine &> /dev/null
 
     if [ $(echo $PROG | grep mpi) ]; then
-        mpirun $PROG $(cat ${file}) 2>/dev/null | tee -a expected/${util}.mine $LOG_FOLDER/${util}.log > /dev/null
+        $PROG $(cat ${file}) 2>/dev/null | tee -a expected/${util}.mine $LOG_FOLDER/${util}.log > /dev/null
     else
         $PROG $(cat ${file}) 2>/dev/null | tee -a expected/${util}.mine $LOG_FOLDER/${util}.log > /dev/null
     fi

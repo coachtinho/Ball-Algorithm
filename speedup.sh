@@ -20,7 +20,7 @@ echo "OpenMP time: $OMP_TIME";
 OMP_SPEEDUP=$(echo "scale=6; $SEQ_TIME/$OMP_TIME" | bc);
 echo "OpenMP speedup: $OMP_SPEEDUP";
 
-MPI_TIME=$(mpirun -n $NUM_THREADS ballAlg-mpi $ARGS 2>&1 > /dev/null);
+MPI_TIME=$(mpirun --use-hwtread-cpus -n $NUM_THREADS ballAlg-mpi $ARGS 2>&1 > /dev/null);
 echo "MPI time: $MPI_TIME";
 
 MPI_SPEEDUP=$(echo "scale=6; $SEQ_TIME/$MPI_TIME" | bc);
