@@ -79,7 +79,7 @@ do
     rm expected/${util}.mine &> /dev/null
 
     if [ $(echo $PROG | grep mpi) ]; then
-        $PROG $(cat ${file}) 2>/dev/null | tee -a expected/${util}.mine $LOG_FOLDER/${util}.log > /dev/null
+        mpirun $PROG $(cat ${file}) 2>/dev/null | tee -a expected/${util}.mine $LOG_FOLDER/${util}.log > /dev/null
     else
         $PROG $(cat ${file}) 2>/dev/null | tee -a expected/${util}.mine $LOG_FOLDER/${util}.log > /dev/null
     fi
@@ -97,9 +97,8 @@ do
     echo >> $LOG_FOLDER/${util}.log
     echo -n "Comparing trees... " | tee -a $LOG_FOLDER/${util}.log
     echo >> $LOG_FOLDER/${util}.log
-
-    if [ "$(diff -q -b expected/${util}.tree expected/${util}.mine)" != "" ]; then
-        diff -b expected/${util}.tree expected/${util}.mine >> $LOG_FOLDER/${util}.log
+    cmp expected/${util}.tree expected/${util}.mine >> $LOG_FOLDER/${util}.log
+    if [ $? -ne 0 ]; then
         echo "DIFFERENT"
     else
         echo "EQUAL"

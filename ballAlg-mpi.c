@@ -9,7 +9,18 @@
 
 int n_dims, n_procs, id;
 long n_points;
-/* MPI_Status status; */
+MPI_Status status;
+
+enum MESSAGES {
+    TERMINATE = -1,
+    PRINT = -2
+};
+
+enum TAGS {
+    PTS = 1,
+    ID = 2,
+    DEPTH = 3
+};
 
 typedef struct _node
 {
@@ -18,17 +29,10 @@ typedef struct _node
     long right;
     double *center;
     double radius;
+    struct _node *next;
 } node_t;
 
-typedef struct _list
-{
-    void *item;
-    struct _list *next;
-} list_t;
-
-list_t *add_to_list(list_t *head, void *item) {
-    list_t *new = (list_t*) malloc(sizeof(list_t));
-    new->item = item;
+node_t *attach_node(node_t *head, node_t *new) {
     new->next = head;
 
     return new;
@@ -289,6 +293,7 @@ node_t *create_node(long id) {
     node->id = id;
     node->center = (double*) malloc(n_dims * sizeof(double));
     node->radius = 0.0;
+    node->next = NULL;
 
     return node;
 }
@@ -298,24 +303,74 @@ void free_node(node_t *node) {
     free(node);
 }
 
-void free_list(list_t *head) {
-    list_t *aux = head;
+void free_list(node_t *head) {
+    node_t *aux = head;
 
     while (aux->next) {
-        list_t *t = aux;
+        node_t *t = aux;
         aux = aux->next;
-        free_node(t->item);
-        free(t);
+        free_node(t);
     }
 
-    free_node(aux->item);
-    free(aux);
+    free_node(aux);
 }
 
-void build_tree(double **pts, list_t **nodes, double **projections, long l, long r, long depth, long id)
+/**
+ * Messaging protocol:
+ * # of points
+ * array of points
+ * depth
+ * id
+ */
+void send_workload(int target, double **pts, long size, long depth, long node_id) {
+    // Send number of points
+    MPI_Send(&size, 1, MPI_LONG, target, PTS, MPI_COMM_WORLD);
+
+    // Send array of points
+    for (long i = 0; i < size; i++) {
+        MPI_Send(pts[i], n_dims, MPI_DOUBLE, target, i, MPI_COMM_WORLD);
+    }
+
+    // Send depth
+    MPI_Send(&depth, 1, MPI_LONG, target, DEPTH, MPI_COMM_WORLD);
+
+    // Send id
+    MPI_Send(&node_id, 1, MPI_LONG, target, ID, MPI_COMM_WORLD);
+}
+
+int receive_workload(int sender, double ***pts, long *size, long *depth, long *node_id) {
+    // Receive number of points
+    MPI_Recv(size, 1, MPI_LONG, sender, PTS, MPI_COMM_WORLD, &status);
+    // Check if termination message
+    if (*size == TERMINATE) {
+        return 1;
+    } else {
+        // Alocate space for points
+        double *_p = (double*) malloc(n_dims * *size * sizeof(double));
+        *pts = (double**) malloc(*size * sizeof(double*));
+        for (long i = 0; i < *size; i++) {
+            (*pts)[i] = &_p[i * n_dims];
+        }
+    }
+
+    // Receive array of points
+    for (long i = 0; i < *size; i++) {
+        MPI_Recv((*pts)[i], n_dims, MPI_DOUBLE, sender, i, MPI_COMM_WORLD, &status);
+    }
+
+    // Receive depth
+    MPI_Recv(depth, 1, MPI_LONG, sender, DEPTH, MPI_COMM_WORLD, &status);
+
+    // Receive id
+    MPI_Recv(node_id, 1, MPI_LONG, sender, ID, MPI_COMM_WORLD, &status);
+
+    return 0;
+}
+
+void build_tree(double **pts, node_t **nodes, double **projections, long l, long r, long depth, long node_id)
 {
 
-    node_t *node = create_node(id);
+    node_t *node = create_node(node_id);
 
     /* It's a leaf */
     if (r - l == 0)
@@ -323,7 +378,7 @@ void build_tree(double **pts, list_t **nodes, double **projections, long l, long
         memcpy(node->center, pts[l], n_dims * sizeof(double));
         node->left = -1;
         node->right = -1;
-        *nodes = add_to_list(*nodes, (void*) node);
+        *nodes = attach_node(*nodes, node);
         return;
     }
 
@@ -360,14 +415,25 @@ void build_tree(double **pts, list_t **nodes, double **projections, long l, long
         }
     }
 
-    node->left = id + 1;
-    node->right = id + 2 * (split_index + 1);
+    node->left = node_id + 1;
+    node->right = node_id + 2 * (split_index + 1);
 
     /* Add new node to list */
-    *nodes = add_to_list(*nodes, (void*) node);
+    *nodes = attach_node(*nodes, node);
+
+    /* Calculate target processor */
+    int target = id + (1 << depth);
+
+    if (target < n_procs) {
+        /* Send right child to other processor */ 
+        long left = l + split_index + 1;
+        long size = r - l - split_index;
+        send_workload(target, pts + left, size, depth + 1, node->right);
+    } else {
+        build_tree(pts, nodes, projections, l + split_index + 1, r, depth + 1, node->right);
+    }
 
     build_tree(pts, nodes, projections, l, l + split_index, depth + 1, node->left);
-    build_tree(pts, nodes, projections, l + split_index + 1, r, depth + 1, node->right);
 }
 
 #pragma region print
@@ -387,16 +453,10 @@ void print_node(node_t *node)
     printf(" \n");
 }
 
-void print_list(list_t *nodes)
+void dump_tree(node_t *nodes)
 {
-    for (list_t *aux = nodes; aux != NULL; aux = aux->next)
-        print_node((node_t*) aux->item);
-}
-
-void dump_tree(list_t *nodes)
-{
-    printf("%d %ld\n", n_dims, 2 * n_points - 1);
-    print_list(nodes);
+    for (node_t *aux = nodes; aux != NULL; aux = aux->next)
+        print_node(aux);
 }
 
 #pragma endregion print
@@ -404,77 +464,91 @@ void dump_tree(list_t *nodes)
 int main(int argc, char *argv[])
 {
     double exec_time = -omp_get_wtime();
-    /* MPI_Init(&argc, &argv); */
-    /* MPI_Comm_rank(MPI_COMM_WORLD, &id); */
-    /* MPI_Comm_size(MPI_COMM_WORLD, &n_procs); */
+    MPI_Init(&argc, &argv);
+    MPI_Comm_rank(MPI_COMM_WORLD, &id);
+    MPI_Comm_size(MPI_COMM_WORLD, &n_procs);
     /* long max_depth = (int)log2(n_procs); */
-    /* If number of threads isn't a power of 2, the difference between
-     * 2 ^ max_depth and num_threads must be accounted or those threads
-     * won't be used
-     */
-    /* long diff = n_procs - (1 << max_depth); */
-    double **pts = get_points(argc, argv, &n_dims, &n_points);
-    double *to_free = *pts;
-    list_t *nodes = NULL;
+    double **pts = NULL;
+    double *to_free = NULL;
+    node_t *nodes = NULL;
+    double **projections = NULL;
+    double *proj = NULL;
+    long depth, node_id;
 
-    /* Allocate memory for projections */
-    double **projections = (double **)malloc(n_points * sizeof(double *));
-    double *proj = (double *)malloc(n_points * n_dims * sizeof(double));
-    for (long i = 0; i < n_points; i++)
-    {
-        projections[i] = &proj[i * n_dims];
+
+    if (!id) {
+        pts = get_points(argc, argv, &n_dims, &n_points);
+
+        // Broadcast number of dimensions
+        MPI_Bcast(&n_dims, 1, MPI_INT, 0, MPI_COMM_WORLD);
+
+        to_free = *pts;
+        depth = 0;
+        node_id = 0;
+
+        /* Allocate memory for projections */
+        projections = (double **)malloc(n_points * sizeof(double *));
+        proj = (double *)malloc(n_points * n_dims * sizeof(double));
+        for (long i = 0; i < n_points; i++)
+        {
+            projections[i] = &proj[i * n_dims];
+        }
+
+        build_tree(pts, &nodes, projections, 0, n_points - 1, depth, node_id);
+    } else {
+        MPI_Bcast(&n_dims, 1, MPI_INT, 0, MPI_COMM_WORLD);
+
+        // Calculate processor that will send workload
+        int sender = id - (1 << (int)log2(id));
+        receive_workload(sender, &pts, &n_points, &depth, &node_id);
+        to_free = *pts;
+        /* Allocate memory for projections */
+        projections = (double **)malloc(n_points * sizeof(double *));
+        proj = (double *)malloc(n_points * n_dims * sizeof(double));
+        for (long i = 0; i < n_points; i++)
+        {
+            projections[i] = &proj[i * n_dims];
+        }
+
+        build_tree(pts, &nodes, projections, 0, n_points - 1, depth, node_id);
     }
 
-    build_tree(pts, &nodes, projections, 0, n_points - 1, 0, 0);
+    if (!id) {
+        // Send termination message if there are idle processors
+        for (int i = n_points; i < n_procs; i++) {
+            int message = TERMINATE;
+            MPI_Send(&message, 1, MPI_INT, i, PTS, MPI_COMM_WORLD);
+        }
+    }
 
-    /* if (!id) */
-    /* { */
-        /* pts = get_points(argc, argv, &n_dims, &n_points); */
-        /* to_free = *pts; */
+    MPI_Barrier(MPI_COMM_WORLD);
 
-        /* build_tree(pts, &nodes, 0, n_points - 1, 0, 0); */
-
-        /* [> Wait for n_processes termination messages <] */
-
-        /* [> Time the execution <] */
-
-        /* [> send print <] */
-    /* } */
-    /* else */
-    /* { */
-        /* [> Wait for set of points <] */
-
-        /* [> n_points, depth, id <] */
-
-        /* [> check if print message <] */
-
-        /* [> if print exit <] */
-
-        /* [> if termination wait for set of points <] */
-
-        /* [> else <] */
-
-        /* [> recv pts <] */
-
-        /* [> sizeof(projections) = n_points | sizeof(nodes) =  (n_points  / 2**(max_depth - depth)) * 2 + (max_depth - depth) <] */
-
-        /* [> build_tree <] */
-
-        /* [> send termination <] */
-    /* } */
-
-    /* MPI_Barrier(MPI_COMM_WORLD); */
-
-    /* print */
     exec_time += omp_get_wtime();
+    if (!id) {
+        fprintf(stderr, "%.1f\n", exec_time);
+        printf("%d %ld\n", n_dims, 2 * n_points - 1);
+    }
+    fflush(stdout);
+
+    int send = PRINT, recv;
+    /* print */
+    if (n_procs < 2) {
+        dump_tree(nodes);
+    } else if (!id) {
+        MPI_Send(&send, 1, MPI_INT, 1, 1, MPI_COMM_WORLD);
+        MPI_Recv(&recv, 1, MPI_INT, n_procs - 1, 0, MPI_COMM_WORLD, &status);
+        dump_tree(nodes);
+    } else {
+        MPI_Recv(&recv, 1, MPI_INT, id - 1, id, MPI_COMM_WORLD, &status);
+        dump_tree(nodes);
+        MPI_Send(&send, 1, MPI_INT, (id + 1) % n_procs, (id + 1) % n_procs, MPI_COMM_WORLD);
+    }
 
 
-    fprintf(stderr, "%.1f\n", exec_time);
-    dump_tree(nodes);
-    free_list(nodes);
-    free(projections);
-    free(proj);
-    free(to_free);
-    free(pts);
-    /* MPI_Finalize(); */
+    if (nodes) free_list(nodes);
+    if (projections) free(projections);
+    if (proj) free(proj);
+    if (to_free) free(to_free);
+    if (pts) free(pts);
+    MPI_Finalize();
 }
