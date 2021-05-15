@@ -6,7 +6,7 @@ MPIC = mpicc
 ifdef DEBUG
 CFLAGS = -Wall -O3 -g -DDEBUG -fopenmp
 else
-CFLAGS = -Wall -O3 -fopenmp
+CFLAGS = -Wall -O3 -g -fopenmp
 endif
 
 LDFLAGS = -lm

@@ -375,6 +375,27 @@ int main(int argc, char *argv[])
     double **pts = get_points(argc, argv, &n_dims, &n_points);
     double *to_free = *pts;
     node_t *root;
+    unsigned seed;
+
+    if(argc != 4){
+        printf("Usage: %s <n_dims> <n_points> <seed>\n", argv[0]);
+        exit(1);
+    }
+
+    n_dims = atoi(argv[1]);
+    if(n_dims < 2){
+        printf("Illegal number of dimensions (%d), must be above 1.\n", n_dims);
+        exit(2);
+    }
+
+    n_points = atol(argv[2]);
+    if(n_points < 1){
+        printf("Illegal number of points (%ld), must be above 0.\n", n_points);
+        exit(3);
+    }
+
+    seed = atoi(argv[3]);
+    srandom(seed);
 
     max_depth = (int)log2(omp_get_max_threads());
     /* If number of threads isn't a power of 2, the difference between

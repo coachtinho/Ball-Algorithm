@@ -34,7 +34,6 @@ double **create_array_pts(int n_dims, long np)
 double **get_points(int argc, char *argv[], int *n_dims, long *np)
 {
     double **pt_arr;
-    unsigned seed;
     long i;
     int j;
 
@@ -54,9 +53,6 @@ double **get_points(int argc, char *argv[], int *n_dims, long *np)
         printf("Illegal number of points (%ld), must be above 0.\n", *np);
         exit(3);
     }
-
-    seed = atoi(argv[3]);
-    srandom(seed);
 
     pt_arr = (double **) create_array_pts(*n_dims, *np);
 

@@ -13,3 +13,4 @@ Visualizer/projection.png
 *.mine
 *.tree
 tests/log
+vgcore.*
