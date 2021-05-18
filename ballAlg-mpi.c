@@ -477,7 +477,7 @@ int receive_points(int sender, MPI_Comm comm, double ***pts, long *size) {
     return 0;
 }
 
-void distr_find_center(long node_id, double *projs, long sort_size, long distr_size, double *center, MPI_Comm comm) {
+void distr_find_center(double *projs, long sort_size, long distr_size, double *center, MPI_Comm comm) {
     /* Each processor searches its portion for right indexes and sends back to leader for broadcast */
     int n_centers = distr_size % 2 == 1 ? 1 : 2;
     int has_centers[n_centers];
@@ -493,23 +493,22 @@ void distr_find_center(long node_id, double *projs, long sort_size, long distr_s
     /* Each processor looks for center points and sends them to leader if found */
     if (!id) {
         double centers[n_centers][n_dims];
-        for (long i = 0; i < sort_size; i++) {
-            for (int j = 0; j < n_centers; j++) {
-                if (i == center_indexes[j]) {
-                    has_centers[j] = 1;
-                    memcpy(centers[j], &projs[i * n_dims], n_dims * sizeof(double));
-                }
+        for (int j = 0; j < n_centers; j++) {
+            if (center_indexes[j] >= 0 && center_indexes[j] < sort_size) {
+                has_centers[j] = 1;
+                memcpy(centers[j], &projs[center_indexes[j] * n_dims], n_dims * sizeof(double));
             }
         }
+
         /* Tell next processor to start searching */
         MPI_Send(&sort_size, 1, MPI_LONG, 1, 1, comm);
 
         /* Accumulate centers at leader to calculate real center */
-        for (int d = 0; d < n_dims; d++) center[d] = 0;
+        memset(center, 0, n_dims * sizeof(double));
         for (int j = 0; j < n_centers; j++) {
             if (!has_centers[j]) MPI_Recv(centers[j], n_dims, MPI_DOUBLE, MPI_ANY_SOURCE, j, comm, &status);
 
-            /* Look in original projections for the real point, not just first coordinate */
+            /* Fill center */
             for (int d = 0; d < n_dims; d++) {
                 center[d] += centers[j][d];
             }
@@ -518,14 +517,13 @@ void distr_find_center(long node_id, double *projs, long sort_size, long distr_s
     } else {
         MPI_Recv(&base, 1, MPI_LONG, id - 1, id, comm, &status);
         long max = sort_size + base;
-        for (long i = base; i < max; i++) {
-            for (int j = 0; j < n_centers; j++) {
-                if (i == center_indexes[j]) {
-                    /* Send center to leader */
-                    MPI_Send(&projs[(i - base) * n_dims], n_dims, MPI_DOUBLE, 0, j, comm);
-                }
+        for (int j = 0; j < n_centers; j++) {
+            if (center_indexes[j] >= base && center_indexes[j] < max) {
+                /* Send center to leader */
+                MPI_Send(&projs[(center_indexes[j] - base) * n_dims], n_dims, MPI_DOUBLE, 0, j, comm);
             }
         }
+
         /* Tell next processor to start searching */
         if (id < n_procs - 1) MPI_Send(&max, 1, MPI_LONG, id + 1, id + 1, comm);
     }
@@ -579,7 +577,6 @@ void free_list(node_t *head) {
 
 void finish_tree(double **pts, node_t **nodes, double **projections, long l, long r, long node_id)
 {
-
     node_t *node = create_node(node_id);
 
     /* It's a leaf */
@@ -611,9 +608,6 @@ void finish_tree(double **pts, node_t **nodes, double **projections, long l, lon
 
     /* Find median point and split; 2 in 1 GIGA FAST */
     long split_index = median(pts, projections, l, r, node->center);
-
-    /* Since the projection skips summing a at the end it must be done here */
-    add_points(node->center, a, node->center);
 
     /* Compute radius */
     for (long i = l; i < r + 1; i++)
@@ -688,7 +682,7 @@ void build_tree(double **pts, MPI_Comm team, node_t **nodes, long my_set, long t
     double *sorted_projs = distr_sorting(proj, &sorted_set, team);
 
     /* Find center projection */
-    distr_find_center(node_id, sorted_projs, sorted_set, team_set, node->center, team);
+    distr_find_center(sorted_projs, sorted_set, team_set, node->center, team);
     free(proj);
     free(sorted_projs);
 
