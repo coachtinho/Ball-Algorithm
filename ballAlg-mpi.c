@@ -6,14 +6,17 @@
 #include <string.h>
 #include "gen_points.h"
 #include <mpi.h>
+#include <unistd.h>
 
 int n_dims, n_procs, id;
-long n_points;
+long n_points, max_depth, diff;
 MPI_Status status;
+omp_lock_t attach_lock;
 
 enum MESSAGES {
     TERMINATE = -1,
-    PRINT = -2
+    PRINT = -2,
+    ACK = -3
 };
 
 enum TAGS {
@@ -575,7 +578,7 @@ void free_list(node_t *head) {
     free_node(aux);
 }
 
-void finish_tree(double **pts, node_t **nodes, double **projections, long l, long r, long node_id)
+void finish_tree(double **pts, node_t **nodes, double **projections, long l, long r, long node_id, long depth)
 {
     node_t *node = create_node(node_id);
 
@@ -585,7 +588,9 @@ void finish_tree(double **pts, node_t **nodes, double **projections, long l, lon
         memcpy(node->center, pts[l], n_dims * sizeof(double));
         node->left = -1;
         node->right = -1;
+        omp_set_lock(&attach_lock);
         *nodes = attach_node(*nodes, node);
+        omp_unset_lock(&attach_lock);
         return;
     }
 
@@ -623,10 +628,22 @@ void finish_tree(double **pts, node_t **nodes, double **projections, long l, lon
     node->right = node_id + 2 * (split_index + 1);
 
     /* Add new node to list */
+    omp_set_lock(&attach_lock);
     *nodes = attach_node(*nodes, node);
+    omp_unset_lock(&attach_lock);
 
-    finish_tree(pts, nodes, projections, l, l + split_index, node->left);
-    finish_tree(pts, nodes, projections, l + split_index + 1, r, node->right);
+    if (depth < max_depth || (depth == max_depth && omp_get_thread_num() < diff)) {
+#pragma omp taskgroup
+        {
+#pragma omp task
+            finish_tree(pts, nodes, projections, l, l + split_index, node->left, depth + 1);
+#pragma omp task
+            finish_tree(pts, nodes, projections, l + split_index + 1, r, node->right, depth + 1);
+        }
+    } else {
+        finish_tree(pts, nodes, projections, l, l + split_index, node->left, depth + 1);
+        finish_tree(pts, nodes, projections, l + split_index + 1, r, node->right, depth + 1);
+    }
 }
 
 void build_tree(double **pts, MPI_Comm team, node_t **nodes, long my_set, long team_set, long node_id) {
@@ -643,7 +660,20 @@ void build_tree(double **pts, MPI_Comm team, node_t **nodes, long my_set, long t
         {
             projections[i] = &proj[i * n_dims];
         }
-        finish_tree(pts, nodes, projections, 0, my_set - 1, node_id);
+        max_depth = (int)log2(omp_get_max_threads());
+        /* If number of threads isn't a power of 2, the difference between
+         * 2 ^ max_depth and num_threads must be accounted or those threads
+         * won't be used
+         */
+        diff = omp_get_max_threads() - (1 << max_depth);
+        omp_init_lock(&attach_lock);
+#pragma omp parallel
+#pragma omp single
+        {
+#pragma omp task
+            finish_tree(pts, nodes, projections, 0, my_set - 1, node_id, 0);
+        }
+        omp_destroy_lock(&attach_lock);
         free(projections);
         free(proj);
         free(to_free);
@@ -720,8 +750,10 @@ void build_tree(double **pts, MPI_Comm team, node_t **nodes, long my_set, long t
     MPI_Comm_size(new_team, &new_procs);
 
     /* Perform split
-     * Approach: gather all L points at L team leader and then scatter them. Same for R
+     * Approach: Each process of team L performs a manual scatter to team R
+     * Receiving process must respond with an ACK
      * */
+    int ack = ACK;
     long new_team_set = team_set / 2 + (team_set % 2 == 1 && id >= (n_procs / 2)); // Number of points my team will receive in total
     long new_set = new_team_set / new_procs + (new_id < (new_team_set % new_procs)); // Number of points I'll receive in total
     /* Alocate space for points */
@@ -731,48 +763,111 @@ void build_tree(double **pts, MPI_Comm team, node_t **nodes, long my_set, long t
         new_pts[i] = &_p[i * n_dims];
     }
 
-    /* New team leaders allocate space for gather */
-    double *team_points = NULL;
-    if (!new_id) {
-        team_points = (double*) malloc(new_team_set * n_dims * sizeof(double)); 
-    }
+    int L_count = split;
+    int R_count = my_set - split;
 
-    int rec_counts[n_procs], rec_displacements[n_procs];
-    int L_count = split * n_dims;
-    int R_count = (my_set - split) * n_dims;
-    /* Gather counts */
-    MPI_Gather(&L_count, 1, MPI_INT, rec_counts, 1, MPI_INT, 0, team);
-    MPI_Gather(&R_count, 1, MPI_INT, rec_counts, 1, MPI_INT, n_procs / 2, team);
-    int sum = 0;
-    rec_displacements[0] = 0;
-    if (!new_id) {
-        for (long i = 1; i < n_procs; i++) {
-            sum += rec_counts[i - 1];
-            rec_displacements[i] = sum;
+    /* Send R points to R team */
+    if (id < n_procs / 2) {
+        int target = 0;
+        if (!new_id) {
+            /* Send how many R points I have to next processor */
+            if (new_id + 1 < new_procs) MPI_Send(&R_count, 1, MPI_INT, 1, 1, new_team);
+        } else {
+            int max;
+            /* Receive amount of R points from previous processor */
+            MPI_Recv(&target, 1, MPI_INT, new_id - 1, new_id, new_team, &status);
+            max = R_count + target;
+
+            /* Send how many R points I have to next processor */
+            if (new_id + 1 < new_procs) MPI_Send(&max, 1, MPI_INT, new_id + 1, new_id + 1, new_team);
+        }
+
+        MPI_Barrier(new_team);
+
+        target = target % (n_procs - new_procs);
+        /* Start sending R points to R team */
+        for (long i = split; i < my_set; i++) {
+            MPI_Request recv;
+            int buf, flag;
+            MPI_Send(pts[i], n_dims, MPI_DOUBLE, target + n_procs / 2, PTS, team);
+
+            /* Receive ACK */
+            MPI_Irecv(&buf, 1, MPI_INT, target + n_procs / 2, PTS, team, &recv);
+            usleep(100);
+            MPI_Test(&recv, &flag, &status);
+
+            target = (target + 1) % (n_procs - new_procs);
+        }
+    } else {
+        long cursor = R_count;
+        /* Copy R points that I already have */
+        memcpy(_p, pts[split], R_count * n_dims * sizeof(double));
+
+        /* Receive R points */
+        while (cursor < new_set) {
+            int sender;
+            MPI_Recv(&_p[cursor * n_dims], n_dims, MPI_DOUBLE, MPI_ANY_SOURCE, PTS, team, &status);
+            sender = status.MPI_SOURCE;
+            /* Send ACK */
+            MPI_Send(&ack, 1, MPI_INT, sender, PTS, team);
+            cursor++;
         }
     }
-    /* Gather L points */
-    MPI_Gatherv(pts[0], L_count, MPI_DOUBLE, team_points, rec_counts, rec_displacements, MPI_DOUBLE, 0, team);
-    /* Gather R points */
-    MPI_Gatherv(pts[split], R_count, MPI_DOUBLE, team_points, rec_counts, rec_displacements, MPI_DOUBLE, n_procs / 2, team);
 
-    /* Scatter them */
-    int send_counts[new_procs], send_displacements[new_procs];
-    sum = 0;
-    if (!new_id) {
-        int remainder = new_team_set % new_procs;
-        for (long i = 0; i < new_procs; i++) {
-            send_counts[i] = (new_team_set / new_procs + (i < remainder)) * n_dims;
-            send_displacements[i] = sum;
-            sum += send_counts[i];
+    MPI_Barrier(team);
+
+    /* Send L points to L team */
+    if (id >= n_procs / 2) {
+        int target = 0;
+        if (!new_id) {
+            /* Send how many L points I have to next processor */
+            if (new_id + 1 < new_procs) MPI_Send(&L_count, 1, MPI_INT, 1, 1, new_team);
+        } else {
+            int max;
+            /* Receive amount of L points from previous processor */
+            MPI_Recv(&target, 1, MPI_INT, new_id - 1, new_id, new_team, &status);
+            max = L_count + target;
+
+            /* Send how many L points I have to next processor */
+            if (new_id + 1 < new_procs) MPI_Send(&max, 1, MPI_INT, new_id + 1, new_id + 1, new_team);
+        }
+
+        MPI_Barrier(new_team);
+
+        target = target % (n_procs - new_procs);
+        /* Start sending L points to L team */
+        for (long i = 0; i < split; i++) {
+            MPI_Request recv;
+            int buf, flag;
+
+            MPI_Send(pts[i], n_dims, MPI_DOUBLE, target, PTS, team);
+
+            /* Receive ACK */
+            MPI_Irecv(&buf, 1, MPI_INT, target, PTS, team, &recv);
+            usleep(100);
+            MPI_Test(&recv, &flag, &status);
+
+            target = (target + 1) % (n_procs - new_procs);
+        }
+    } else {
+        long cursor = L_count;
+        /* Copy L points that I already have */
+        memcpy(_p, pts[0], L_count * n_dims * sizeof(double));
+
+        /* Receive L points */
+        while (cursor < new_set) {
+            int sender;
+            MPI_Recv(&_p[cursor * n_dims], n_dims, MPI_DOUBLE, MPI_ANY_SOURCE, PTS, team, &status);
+            sender = status.MPI_SOURCE;
+            /* Send ACK */
+            MPI_Send(&ack, 1, MPI_INT, sender, PTS, team);
+            cursor++;
         }
     }
-    MPI_Scatterv(team_points, send_counts, send_displacements, MPI_DOUBLE, _p, new_set * n_dims, MPI_DOUBLE, 0, new_team);
 
-    if (team_points) free(team_points);
     free(*pts);
     free(pts);
-    build_tree(new_pts, new_team, nodes, new_set, new_team_set, new_node_id);
+    /* build_tree(new_pts, new_team, nodes, new_set, new_team_set, new_node_id); */
 }
 
 #pragma region print
