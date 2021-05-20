@@ -8,8 +8,9 @@
 #include <mpi.h>
 
 int n_dims, n_procs, id;
-long n_points;
+long n_points, max_depth, diff;
 MPI_Status status;
+omp_lock_t attach_lock;
 
 enum MESSAGES {
     TERMINATE = -1,
@@ -575,7 +576,7 @@ void free_list(node_t *head) {
     free_node(aux);
 }
 
-void finish_tree(double **pts, node_t **nodes, double **projections, long l, long r, long node_id)
+void finish_tree(double **pts, node_t **nodes, double **projections, long l, long r, long node_id, long depth)
 {
     node_t *node = create_node(node_id);
 
@@ -585,7 +586,9 @@ void finish_tree(double **pts, node_t **nodes, double **projections, long l, lon
         memcpy(node->center, pts[l], n_dims * sizeof(double));
         node->left = -1;
         node->right = -1;
+        omp_set_lock(&attach_lock);
         *nodes = attach_node(*nodes, node);
+        omp_unset_lock(&attach_lock);
         return;
     }
 
@@ -623,10 +626,22 @@ void finish_tree(double **pts, node_t **nodes, double **projections, long l, lon
     node->right = node_id + 2 * (split_index + 1);
 
     /* Add new node to list */
+    omp_set_lock(&attach_lock);
     *nodes = attach_node(*nodes, node);
+    omp_unset_lock(&attach_lock);
 
-    finish_tree(pts, nodes, projections, l, l + split_index, node->left);
-    finish_tree(pts, nodes, projections, l + split_index + 1, r, node->right);
+    if (depth < max_depth || (depth == max_depth && omp_get_thread_num() < diff)) {
+#pragma omp taskgroup
+        {
+#pragma omp task
+            finish_tree(pts, nodes, projections, l, l + split_index, node->left, depth + 1);
+#pragma omp task
+            finish_tree(pts, nodes, projections, l + split_index + 1, r, node->right, depth + 1);
+        }
+    } else {
+        finish_tree(pts, nodes, projections, l, l + split_index, node->left, depth + 1);
+        finish_tree(pts, nodes, projections, l + split_index + 1, r, node->right, depth + 1);
+    }
 }
 
 void build_tree(double **pts, MPI_Comm team, node_t **nodes, long my_set, long team_set, long node_id) {
@@ -639,11 +654,20 @@ void build_tree(double **pts, MPI_Comm team, node_t **nodes, long my_set, long t
         double **projections = (double **)malloc(my_set * sizeof(double *));
         double *proj = (double *)malloc(my_set * n_dims * sizeof(double));
         double *to_free = *pts;
+        max_depth = (int)log2(omp_get_max_threads());
+        diff = omp_get_max_threads() - (1 << max_depth);
         for (long i = 0; i < my_set; i++)
         {
             projections[i] = &proj[i * n_dims];
         }
-        finish_tree(pts, nodes, projections, 0, my_set - 1, node_id);
+        omp_init_lock(&attach_lock);
+#pragma omp parallel
+#pragma omp single
+        {
+#pragma omp task
+            finish_tree(pts, nodes, projections, 0, my_set - 1, node_id, 0);
+        }
+        omp_destroy_lock(&attach_lock);
         free(projections);
         free(proj);
         free(to_free);
