@@ -382,7 +382,7 @@ int main(int argc, char *argv[])
     srandom(seed);
 
     exec_time = -omp_get_wtime();
-    double **pts = get_points(argc, argv, &n_dims, &n_points);
+    double **pts = get_points(argc, argv, &n_dims, &n_points, 0);
     double *to_free = *pts;
 
     /* Allocate memory for projections */

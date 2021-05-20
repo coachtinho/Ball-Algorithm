@@ -31,7 +31,13 @@ double **create_array_pts(int n_dims, long np)
 }
 
 
-double **get_points(int argc, char *argv[], int *n_dims, long *np)
+void consume_rand(int n) {
+    for (int i = 0; i < n; i++) {
+        random();
+    }
+}
+
+double **get_points(int argc, char *argv[], int *n_dims, long *np, long n_consumes)
 {
     double **pt_arr;
     long i;
@@ -55,6 +61,11 @@ double **get_points(int argc, char *argv[], int *n_dims, long *np)
     }
 
     pt_arr = (double **) create_array_pts(*n_dims, *np);
+
+    int seed = atoi(argv[3]);
+    srandom(seed);
+
+    consume_rand(n_consumes);
 
     for(i = 0; i < *np; i++)
         for(j = 0; j < *n_dims; j++)

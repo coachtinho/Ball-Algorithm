@@ -806,31 +806,10 @@ int main(int argc, char *argv[])
     MPI_Init(&argc, &argv);
     MPI_Comm_rank(MPI_COMM_WORLD, &id);
     MPI_Comm_size(MPI_COMM_WORLD, &n_procs);
-    unsigned seed;
     double **pts = NULL;
     node_t *nodes = NULL;
     long my_set;
     MPI_Comm comm;
-
-    if(argc != 4){
-        printf("Usage: %s <n_dims> <n_points> <seed>\n", argv[0]);
-        exit(1);
-    }
-
-    n_dims = atoi(argv[1]);
-    if(n_dims < 2){
-        printf("Illegal number of dimensions (%d), must be above 1.\n", n_dims);
-        exit(2);
-    }
-
-    n_points = atol(argv[2]);
-    if(n_points < 1){
-        printf("Illegal number of points (%ld), must be above 0.\n", n_points);
-        exit(3);
-    }
-
-    seed = atoi(argv[3]);
-    srandom(seed);
 
     /* Create communicator without excess processors */
     if (n_points < n_procs) {
@@ -845,45 +824,31 @@ int main(int argc, char *argv[])
         comm = MPI_COMM_WORLD;
     }
 
-    /* Spread points across rest of processors */
-    if (!id) {
+    if (id == 0) {
         printf("%d %ld\n", n_dims, 2 * n_points - 1);
-        long pts_per_proc = n_points / n_procs;
-        long remainder = n_points % n_procs;
-
-        /* Get points for processor 0 */
-        sprintf(argv[2], "%ld", pts_per_proc + (remainder > 0));
-        remainder--;
-        pts = get_points(argc, argv, &n_dims, &my_set);
-
-        for (int i = 1; i < n_procs; i++) {
-            long set_size;
-            double **pts_for_i;
-            sprintf(argv[2], "%ld", pts_per_proc + (remainder > 0));
-            remainder--;
-
-            if (atoi(argv[2]) > 0) {
-                pts_for_i = get_points(argc, argv, &n_dims, &set_size);
-                send_points(i, MPI_COMM_WORLD, pts_for_i, set_size);
-                free(*pts_for_i);
-                free(pts_for_i);
-            } else {
-                /* Send termination message */
-                long message = TERMINATE;
-                MPI_Send(&message, 1, MPI_LONG, i, PTS, MPI_COMM_WORLD);
-            }
-        }
-
-        MPI_Comm_rank(comm, &id);
-        MPI_Comm_size(comm, &n_procs);
-        build_tree(pts, comm, &nodes, my_set, n_points, 0);
-    } else {
-        if (!receive_points(0, MPI_COMM_WORLD, &pts, &my_set)) {
-            MPI_Comm_rank(comm, &id);
-            MPI_Comm_size(comm, &n_procs);
-            build_tree(pts, comm, &nodes, my_set, n_points, 0);
-        }
     }
+
+    /* Generate points */
+    long pts_per_proc = n_points / n_procs;
+    long remainder = n_points % n_procs;
+    long to_consume = n_dims;
+
+    if (id < remainder) {
+        my_set = pts_per_proc + 1;
+        to_consume *= (pts_per_proc + 1) * id;
+    }
+    else {
+        my_set = pts_per_proc;
+        to_consume *= (pts_per_proc + 1) * remainder + (pts_per_proc) * (id - remainder);
+    }
+
+    sprintf(argv[2], "%ld", my_set);
+    pts = get_points(argc, argv, &n_dims, &my_set, to_consume);
+
+    MPI_Comm_rank(comm, &id);
+    MPI_Comm_size(comm, &n_procs);
+    build_tree(pts, comm, &nodes, my_set, n_points, 0);
+    
     MPI_Barrier(MPI_COMM_WORLD);
 
     exec_time += omp_get_wtime();
