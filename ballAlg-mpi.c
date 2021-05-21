@@ -7,6 +7,8 @@
 #include "gen_points.h"
 #include <mpi.h>
 
+/* TODO: remove list */
+
 int n_dims, n_procs, id;
 long n_points, max_depth, diff;
 MPI_Status status;
@@ -222,7 +224,7 @@ void project(double *p, double *a, double *b_a, double *common_factor, double *r
 
 #pragma endregion
 
-#pragma region qselect
+#pragma region qsort
 
 #define SWAP(x, y)         \
     {                      \
@@ -247,6 +249,40 @@ int less_than(double *p1, double *p2)
     return 0;
 }
 
+long qsort_partition(double **pts, double **projs, long l, long r) {
+    double *pivot = projs[(int) (r + l) / 2];
+    long i = l - 1;
+    long j = r + 1;
+
+    while (1) {
+        do
+        {
+            i++;
+        } while (less_than(projs[i], pivot));
+        do
+        {
+            j--;
+        } while (less_than(pivot, projs[j]));
+        if (i >= j) {
+            return j;
+        }
+        SWAP(projs[i], projs[j]);
+        SWAP(pts[i], pts[j]);
+    }
+}
+
+void quicksort(double **pts, double **projs, long l, long r) {
+    if (l < r) {
+        long p = qsort_partition(pts, projs, l, r);
+        quicksort(pts, projs, l, p);
+        quicksort(pts, projs, p + 1, r);
+    }
+}
+
+#pragma endregion
+
+#pragma region qselect
+
 long median_of_three(double **pts, double **projs, long l, long r)
 {
     long m = (l + r) / 2;
@@ -268,7 +304,7 @@ long median_of_three(double **pts, double **projs, long l, long r)
     return m;
 }
 
-long partition(double **pts, double **projs, long l, long r, long pivotIndex)
+long q_select_partition(double **pts, double **projs, long l, long r, long pivotIndex)
 {
     double *pivotValue = projs[pivotIndex];
 
@@ -302,7 +338,7 @@ double *qselect(double **pts, double **projs, long l, long r, long k)
             return projs[l];
         }
         long pivotIndex = median_of_three(pts, projs, l, r);
-        pivotIndex = partition(pts, projs, l, r, pivotIndex);
+        pivotIndex = q_select_partition(pts, projs, l, r, pivotIndex);
         if (k == pivotIndex)
         {
             return projs[k];
@@ -704,6 +740,11 @@ void build_tree(double **pts, MPI_Comm team, node_t **nodes, long my_set, long t
     /* Sort first coordinate of projections */
     long sorted_set = my_set;
     double *sorted_projs = distr_sorting(proj, &sorted_set, team);
+    /*for (long i = 0; i < sorted_set; i++) {
+        printf("Proc %d:%ld -> ", id, i);
+        print_point(&sorted_projs[i * n_dims], n_dims);
+    }*/
+    printf("Proc %d: %ld\n", id, sorted_set);
 
     /* Find center projection */
     distr_find_center(sorted_projs, sorted_set, team_set, node->center, team);
@@ -796,7 +837,7 @@ void build_tree(double **pts, MPI_Comm team, node_t **nodes, long my_set, long t
     if (team_points) free(team_points);
     free(*pts);
     free(pts);
-    build_tree(new_pts, new_team, nodes, new_set, new_team_set, new_node_id);
+    //build_tree(new_pts, new_team, nodes, new_set, new_team_set, new_node_id);
 }
 
 #pragma region print
@@ -827,35 +868,51 @@ void dump_tree(node_t *nodes)
 int main(int argc, char *argv[])
 {
     double exec_time = -omp_get_wtime();
+
+     if(argc != 4){
+        printf("Usage: %s <n_dims> <n_points> <seed>\n", argv[0]);
+        exit(1);
+    }
+
+    n_dims = atoi(argv[1]);
+    if(n_dims < 2){
+        printf("Illegal number of dimensions (%d), must be above 1.\n", n_dims);
+        exit(2);
+    }
+
+    n_points = atol(argv[2]);
+    if(n_points < 1){
+        printf("Illegal number of points (%ld), must be above 0.\n", n_points);
+        exit(3);
+    }
+
     MPI_Init(&argc, &argv);
-    MPI_Comm_rank(MPI_COMM_WORLD, &id);
-    MPI_Comm_size(MPI_COMM_WORLD, &n_procs);
-    double **pts = NULL;
-    node_t *nodes = NULL;
-    long my_set;
-    MPI_Comm comm;
 
     /* Create communicator without excess processors */
-    if (n_points < n_procs) {
-        MPI_Group old_group, new_group;
-        int excess[n_procs - n_points];
-        for (int i = 0; i < n_procs - n_points; i++) excess[i] = n_points + i;
-
-        MPI_Comm_group(MPI_COMM_WORLD, &old_group);
-        MPI_Group_excl(old_group, n_procs - n_points, excess, &new_group);
-        MPI_Comm_create(MPI_COMM_WORLD, new_group, &comm);
-    } else {
-        comm = MPI_COMM_WORLD;
-    }
+    MPI_Comm comm;
+    MPI_Comm_rank(MPI_COMM_WORLD, &id);
+    MPI_Comm_split(MPI_COMM_WORLD, id < n_points, id, &comm);
 
     if (id == 0) {
         printf("%d %ld\n", n_dims, 2 * n_points - 1);
     }
 
+    /* Kill excess processors */
+    if (id >= n_points) {
+        MPI_Finalize();
+        return 0;
+    }
+    
+    MPI_Comm_rank(comm, &id);
+    MPI_Comm_size(comm, &n_procs);
+
     /* Generate points */
     long pts_per_proc = n_points / n_procs;
     long remainder = n_points % n_procs;
     long to_consume = n_dims;
+    long my_set;
+    double **pts = NULL;
+    node_t *nodes = NULL;
 
     if (id < remainder) {
         my_set = pts_per_proc + 1;
@@ -869,16 +926,15 @@ int main(int argc, char *argv[])
     sprintf(argv[2], "%ld", my_set);
     pts = get_points(argc, argv, &n_dims, &my_set, to_consume);
 
-    MPI_Comm_rank(comm, &id);
-    MPI_Comm_size(comm, &n_procs);
+    /* Build tree */
     build_tree(pts, comm, &nodes, my_set, n_points, 0);
     
-    MPI_Barrier(MPI_COMM_WORLD);
+    MPI_Barrier(comm);
 
     exec_time += omp_get_wtime();
 
-    MPI_Comm_rank(MPI_COMM_WORLD, &id);
-    MPI_Comm_size(MPI_COMM_WORLD, &n_procs);
+    MPI_Comm_rank(comm, &id);
+    MPI_Comm_size(comm, &n_procs);
 
     if (!id) {
         fprintf(stderr, "%.1f\n", exec_time);
@@ -889,13 +945,13 @@ int main(int argc, char *argv[])
     if (n_procs < 2) {
         dump_tree(nodes);
     } else if (!id) {
-        MPI_Send(&send, 1, MPI_INT, 1, 1, MPI_COMM_WORLD);
-        MPI_Recv(&recv, 1, MPI_INT, n_procs - 1, 0, MPI_COMM_WORLD, &status);
+        MPI_Send(&send, 1, MPI_INT, 1, 1, comm);
+        MPI_Recv(&recv, 1, MPI_INT, n_procs - 1, 0, comm, &status);
         if (nodes) dump_tree(nodes);
     } else {
-        MPI_Recv(&recv, 1, MPI_INT, id - 1, id, MPI_COMM_WORLD, &status);
+        MPI_Recv(&recv, 1, MPI_INT, id - 1, id, comm, &status);
         if (nodes) dump_tree(nodes);
-        MPI_Send(&send, 1, MPI_INT, (id + 1) % n_procs, (id + 1) % n_procs, MPI_COMM_WORLD);
+        MPI_Send(&send, 1, MPI_INT, (id + 1) % n_procs, (id + 1) % n_procs, comm);
     }
 
 
