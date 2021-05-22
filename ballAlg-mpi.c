@@ -21,7 +21,9 @@ enum MESSAGES {
 
 enum TAGS {
     PTS = 1,
-    ID = 2
+    ID = 2,
+    CENTER = 3,
+    INTER = 4
 };
 
 typedef struct _node
@@ -226,6 +228,14 @@ void project(double *p, double *a, double *b_a, double *common_factor, double *r
 
 #pragma region qsort
 
+#define MEMSWAP(x, y)         \
+    {                      \
+        double temp[n_dims]; \
+        memcpy(temp, x, n_dims * sizeof(double));             \
+        memcpy(x, y, n_dims * sizeof(double));         \
+        memcpy(y, temp, n_dims * sizeof(double));         \
+    }
+
 #define SWAP(x, y)         \
     {                      \
         double *temp1 = x; \
@@ -249,8 +259,8 @@ int less_than(double *p1, double *p2)
     return 0;
 }
 
-long qsort_partition(double **pts, double **projs, long l, long r) {
-    double *pivot = projs[(int) (r + l) / 2];
+long qsort_partition(double *pts, double *projs, long l, long r) {
+    double *pivot = &projs[(r + l) / 2 * n_dims];
     long i = l - 1;
     long j = r + 1;
 
@@ -258,20 +268,20 @@ long qsort_partition(double **pts, double **projs, long l, long r) {
         do
         {
             i++;
-        } while (less_than(projs[i], pivot));
+        } while (less_than(&projs[i * n_dims], pivot));
         do
         {
             j--;
-        } while (less_than(pivot, projs[j]));
+        } while (less_than(pivot, &projs[j * n_dims]));
         if (i >= j) {
             return j;
         }
-        SWAP(projs[i], projs[j]);
-        SWAP(pts[i], pts[j]);
+        MEMSWAP(&projs[i * n_dims], &projs[j * n_dims]);
+        MEMSWAP(&pts[i * n_dims], &pts[j * n_dims]);
     }
 }
 
-void quicksort(double **pts, double **projs, long l, long r) {
+void quicksort(double *pts, double *projs, long l, long r) {
     if (l < r) {
         long p = qsort_partition(pts, projs, l, r);
         quicksort(pts, projs, l, p);
@@ -387,14 +397,6 @@ long median(double **pts, double **projs, long l, long r, double *center_pt)
 
 #pragma region distributed
 
-#define MEMSWAP(x, y)         \
-    {                      \
-        double temp[n_dims]; \
-        memcpy(temp, x, n_dims * sizeof(double));             \
-        memcpy(x, y, n_dims * sizeof(double));         \
-        memcpy(y, temp, n_dims * sizeof(double));         \
-    }
-
 #define SWAPDOUBLES(x, y)         \
     {                      \
         double temp; \
@@ -421,21 +423,20 @@ int cmppoints(const void *a, const void *b)
 }
 
 /* Parallel sorting by regular sampling */
-double *distr_sorting(double *pts, long *set_size, MPI_Comm comm) {
+long distr_sorting(double *pts, double *proj, long size, MPI_Comm comm, double **sort_proj, double **sort_pts) {
     double my_pivots[n_procs];
     double all_pivots[n_procs * n_procs];
     int counts[n_procs];
     int displacements[n_procs];
     int rec_counts[n_procs];
     int rec_displacements[n_procs];
-    long size = *set_size;
 
     /* Sort own portion of the array */
-    qsort(pts, size, n_dims * sizeof(double), cmppoints);
+    quicksort(pts, proj, 0, size - 1);
 
     /* Select pivots */
     for (long i = 0; i < n_procs; i++) {
-        my_pivots[i] = pts[i * (size / n_procs) * n_dims];
+        my_pivots[i] = proj[i * (size / n_procs) * n_dims];
     } 
 
     /* Collect pivots at leader */
@@ -453,7 +454,7 @@ double *distr_sorting(double *pts, long *set_size, MPI_Comm comm) {
     /* Calculate counts and displacements and share them  */
     long current = 0, count = 0, sum = 0;
     for (long pivot = 0; pivot < n_procs - 1; pivot++) {
-        while (current < size && pts[current * n_dims] < my_pivots[pivot]) {
+        while (current < size && proj[current * n_dims] < my_pivots[pivot]) {
             count += n_dims;
             current++;
         }
@@ -472,78 +473,46 @@ double *distr_sorting(double *pts, long *set_size, MPI_Comm comm) {
     }
 
     /* Final distribution of sorted array */
-    double *rec_buf = (double*) malloc(sum * sizeof(double*));
-    MPI_Alltoallv(pts, counts, displacements, MPI_DOUBLE, rec_buf, rec_counts, rec_displacements, MPI_DOUBLE, comm);
-    qsort(rec_buf, sum / n_dims, n_dims * sizeof(double), cmppoints);
+    *sort_proj = (double*) malloc(sum * sizeof(double));
+    *sort_pts = (double*) malloc(sum * sizeof(double));
+    MPI_Alltoallv(proj, counts, displacements, MPI_DOUBLE, *sort_proj, rec_counts, rec_displacements, MPI_DOUBLE, comm);
+    MPI_Alltoallv(pts, counts, displacements, MPI_DOUBLE, *sort_pts, rec_counts, rec_displacements, MPI_DOUBLE, comm);
+    quicksort(*sort_pts, *sort_proj, 0, sum / n_dims - 1);
 
-    *set_size = sum / n_dims;
-    return rec_buf;
+    return sum / n_dims;
 }
 
-void send_points(int target, MPI_Comm comm, double **pts, long size) {
-    /* Send number of points */
-    MPI_Send(&size, 1, MPI_LONG, target, PTS, comm);
-
-    /* Send array of points */
-    for (long i = 0; i < size; i++) {
-        MPI_Send(pts[i], n_dims, MPI_DOUBLE, target, i, comm);
-    }
-}
-
-int receive_points(int sender, MPI_Comm comm, double ***pts, long *size) {
-    /* Receive number of points */
-    MPI_Recv(size, 1, MPI_LONG, sender, PTS, comm, &status);
-
-    /* Check if termination message */
-    if (*size == TERMINATE) {
-        return 1;
-    } else {
-        /* Alocate space for points */
-        double *_p = (double*) malloc(n_dims * *size * sizeof(double));
-        *pts = (double**) malloc(*size * sizeof(double*));
-        for (long i = 0; i < *size; i++) {
-            (*pts)[i] = &_p[i * n_dims];
-        }
-    }
-
-    /* Receive array of points */
-    for (long i = 0; i < *size; i++) {
-        MPI_Recv((*pts)[i], n_dims, MPI_DOUBLE, sender, i, comm, &status);
-    }
-
-    return 0;
-}
-
-void distr_find_center(double *projs, long sort_size, long distr_size, double *center, MPI_Comm comm) {
+long distr_find_center(double *projs, long sort_size, long distr_size, double *center, MPI_Comm comm) {
     /* Each processor searches its portion for right indexes and sends back to leader for broadcast */
     int n_centers = distr_size % 2 == 1 ? 1 : 2;
-    int has_centers[n_centers];
+    long has_centers[n_centers];
     long center_indexes[n_centers];
     long base;
 
     /* Init values */
     for (int i = 0; i < n_centers; i++) {
-        has_centers[i] = 0;
+        has_centers[i] = -1;
         center_indexes[i] = n_centers == 1 ? distr_size / 2 : distr_size / 2 - 1 + i;
     }
 
     /* Each processor looks for center points and sends them to leader if found */
     if (!id) {
         double centers[n_centers][n_dims];
-        for (int j = 0; j < n_centers; j++) {
-            if (center_indexes[j] >= 0 && center_indexes[j] < sort_size) {
-                has_centers[j] = 1;
-                memcpy(centers[j], &projs[center_indexes[j] * n_dims], n_dims * sizeof(double));
-            }
-        }
 
         /* Tell next processor to start searching */
         MPI_Send(&sort_size, 1, MPI_LONG, 1, 1, comm);
 
+        for (int j = 0; j < n_centers; j++) {
+            if (center_indexes[j] >= 0 && center_indexes[j] < sort_size) {
+                has_centers[j] = center_indexes[j];
+                memcpy(centers[j], &projs[center_indexes[j] * n_dims], n_dims * sizeof(double));
+            }
+        }
+
         /* Accumulate centers at leader to calculate real center */
         memset(center, 0, n_dims * sizeof(double));
         for (int j = 0; j < n_centers; j++) {
-            if (!has_centers[j]) MPI_Recv(centers[j], n_dims, MPI_DOUBLE, MPI_ANY_SOURCE, j, comm, &status);
+            if (has_centers[j] == -1) MPI_Recv(centers[j], n_dims, MPI_DOUBLE, MPI_ANY_SOURCE, j, comm, &status);
 
             /* Fill center */
             for (int d = 0; d < n_dims; d++) {
@@ -554,17 +523,20 @@ void distr_find_center(double *projs, long sort_size, long distr_size, double *c
     } else {
         MPI_Recv(&base, 1, MPI_LONG, id - 1, id, comm, &status);
         long max = sort_size + base;
+
+        /* Tell next processor to start searching */
+        if (id < n_procs - 1) MPI_Send(&max, 1, MPI_LONG, id + 1, id + 1, comm);
+
         for (int j = 0; j < n_centers; j++) {
             if (center_indexes[j] >= base && center_indexes[j] < max) {
+                has_centers[j] = center_indexes[j] - base;
                 /* Send center to leader */
                 MPI_Send(&projs[(center_indexes[j] - base) * n_dims], n_dims, MPI_DOUBLE, 0, j, comm);
             }
         }
-
-        /* Tell next processor to start searching */
-        if (id < n_procs - 1) MPI_Send(&max, 1, MPI_LONG, id + 1, id + 1, comm);
     }
     MPI_Bcast(center, n_dims, MPI_DOUBLE, 0, comm);
+    return has_centers[n_centers - 1];
 }
 
 long distr_partition(double **pts, double *projs, long size, double *center) {
@@ -711,11 +683,8 @@ void build_tree(double **pts, MPI_Comm team, node_t **nodes, long my_set, long t
         return;
     }
 
-    node_t *node = create_node(node_id);
-
     /* Find a and b */
-    double *a = (double*) malloc(n_dims * sizeof(double));
-    double *b = (double*) malloc(n_dims * sizeof(double));
+    double a[n_dims], b[n_dims];
 
     distr_get_furthest_points(pts, team, my_set, a, b);
     
@@ -727,117 +696,131 @@ void build_tree(double **pts, MPI_Comm team, node_t **nodes, long my_set, long t
     mul_point(b_a, 1 / denominator, common_factor);
 
     /* Allocate memory for projections */
-    double *proj_first_coord = (double*) malloc(my_set * sizeof(double));
     double *proj = (double*) malloc(my_set * n_dims * sizeof(double));
     for (long i = 0; i < my_set; i++)
     {
         project(pts[i], a, b_a, common_factor, &proj[i * n_dims]);
-        proj_first_coord[i] = proj[i * n_dims];
     }
-    free(a);
-    free(b);
 
     /* Sort first coordinate of projections */
-    long sorted_set = my_set;
-    double *sorted_projs = distr_sorting(proj, &sorted_set, team);
-    /*for (long i = 0; i < sorted_set; i++) {
-        printf("Proc %d:%ld -> ", id, i);
-        print_point(&sorted_projs[i * n_dims], n_dims);
-    }*/
-    printf("Proc %d: %ld\n", id, sorted_set);
+    double *sorted_projs, *sorted_pts;
+    long sorted_set = distr_sorting(*pts, proj, my_set, team, &sorted_projs, &sorted_pts);
+    free(*pts);
+    free(proj);
 
     /* Find center projection */
-    distr_find_center(sorted_projs, sorted_set, team_set, node->center, team);
-    free(proj);
+    /* split is -1 if I don't have the center */
+    /* index of first R point otherwise */
+    double center[n_dims];
+    long split = distr_find_center(sorted_projs, sorted_set, team_set, center, team);
     free(sorted_projs);
-
-    /* Partition own portion of array */
-    long split = distr_partition(pts, proj_first_coord, my_set, node->center); 
-    free(proj_first_coord);
 
     /* Calculate radius */
     double max_distance = 0.0;
-    for (long i = 0; i < my_set; i++)
+    double radius;
+    for (long i = 0; i < sorted_set; i++)
     {
-        double dist = distance(node->center, pts[i]);
+        double dist = distance(center, &sorted_pts[i * n_dims]);
         if (dist > max_distance)
         {
             max_distance = dist;
         }
     }
-    MPI_Reduce(&max_distance, &node->radius, 1, MPI_DOUBLE, MPI_MAX, 0, team);
+    MPI_Reduce(&max_distance, &radius, 1, MPI_DOUBLE, MPI_MAX, 0, team);
 
-    node->left = node_id + 1;
-    node->right = node_id + 2 * (team_set / 2);
-    long new_node_id = id < n_procs / 2 ? node->left : node->right;
+    /* Processor with center sends its id to leader so it can broadcast it */
+    int center_proc = -1;
+    if (!id && split == -1) {
+        MPI_Recv(&center_proc, 1, MPI_INT, MPI_ANY_SOURCE, CENTER, team, &status); 
+    } else if (split != -1) {
+        MPI_Send(&id, 1, MPI_INT, 0, CENTER, team);
+    }
+    MPI_Bcast(&center_proc, 1, MPI_INT, 0, team);
+
+    long left = node_id + 1;
+    long right = node_id + 2 * (team_set / 2);
+    long new_node_id = id < center_proc ? left : right;
+
+    /* Add new node to leader's list */
     if (!id) {
-        /* Add new node to leader's list */
+        node_t *node = create_node(node_id);
+        node->left = left;
+        node->right = right;
+        node->radius = radius;
+        memcpy(node->center, center, n_dims * sizeof(double));
         *nodes = attach_node(*nodes, node);
-    } else {
-        free_node(node);
     }
 
     /* Split communicator */
-    MPI_Comm new_team;
+    MPI_Comm new_team, inter;
     int new_id, new_procs;
-    MPI_Comm_split(team, id < (n_procs / 2), id, &new_team);
+    long new_team_set = team_set / 2 + (team_set % 2 && id >= center_proc);
+    MPI_Comm_split(team, id >= center_proc, id, &new_team);
     MPI_Comm_rank(new_team, &new_id);
     MPI_Comm_size(new_team, &new_procs);
-
-    /* Perform split
-     * Approach: gather all L points at L team leader and then scatter them. Same for R
-     * */
-    long new_team_set = team_set / 2 + (team_set % 2 == 1 && id >= (n_procs / 2)); // Number of points my team will receive in total
-    long new_set = new_team_set / new_procs + (new_id < (new_team_set % new_procs)); // Number of points I'll receive in total
-    /* Alocate space for points */
-    double *_p = (double*) malloc(n_dims * new_set * sizeof(double));
-    double **new_pts = (double**) malloc(new_set * sizeof(double*));
-    for (long i = 0; i < new_set; i++) {
-        new_pts[i] = &_p[i * n_dims];
+    /* Create intercommunicator */
+    if (id < center_proc) {
+        MPI_Intercomm_create(new_team, 0, team, center_proc, INTER, &inter);
+    } else {
+        MPI_Intercomm_create(new_team, 0, team, 0, INTER, &inter);
     }
 
-    /* New team leaders allocate space for gather */
-    double *team_points = NULL;
-    if (!new_id) {
-        team_points = (double*) malloc(new_team_set * n_dims * sizeof(double)); 
-    }
-
-    int rec_counts[n_procs], rec_displacements[n_procs];
-    int L_count = split * n_dims;
-    int R_count = (my_set - split) * n_dims;
-    /* Gather counts */
-    MPI_Gather(&L_count, 1, MPI_INT, rec_counts, 1, MPI_INT, 0, team);
-    MPI_Gather(&R_count, 1, MPI_INT, rec_counts, 1, MPI_INT, n_procs / 2, team);
+    /* Calculate counts and displacements */
+    int rec_count = -1;
+    int send_counts[n_procs - new_procs];
+    int send_displacements[n_procs - new_procs];
     int sum = 0;
-    rec_displacements[0] = 0;
-    if (!new_id) {
-        for (long i = 1; i < n_procs; i++) {
-            sum += rec_counts[i - 1];
-            rec_displacements[i] = sum;
-        }
-    }
-    /* Gather L points */
-    MPI_Gatherv(pts[0], L_count, MPI_DOUBLE, team_points, rec_counts, rec_displacements, MPI_DOUBLE, 0, team);
-    /* Gather R points */
-    MPI_Gatherv(pts[split], R_count, MPI_DOUBLE, team_points, rec_counts, rec_displacements, MPI_DOUBLE, n_procs / 2, team);
-
-    /* Scatter them */
-    int send_counts[new_procs], send_displacements[new_procs];
-    sum = 0;
-    if (!new_id) {
-        int remainder = new_team_set % new_procs;
-        for (long i = 0; i < new_procs; i++) {
-            send_counts[i] = (new_team_set / new_procs + (i < remainder)) * n_dims;
+    if (id == center_proc) {
+        long remainder = split % (n_procs - new_procs);
+        for (long i = 0; i < n_procs - new_procs; i++) {
+            send_counts[i] = (split / (n_procs - new_procs) + (i < remainder)) * n_dims;
             send_displacements[i] = sum;
             sum += send_counts[i];
         }
     }
-    MPI_Scatterv(team_points, send_counts, send_displacements, MPI_DOUBLE, _p, new_set * n_dims, MPI_DOUBLE, 0, new_team);
+    if (id < center_proc) {
+        MPI_Scatter(send_counts, 1, MPI_INT, &rec_count, 1, MPI_INT, 0, inter);
+    } else if (id == center_proc) {
+        MPI_Scatter(send_counts, 1, MPI_INT, &rec_count, 1, MPI_INT, MPI_ROOT, inter);
+    } else {
+        MPI_Scatter(send_counts, 1, MPI_INT, &rec_count, 1, MPI_INT, MPI_PROC_NULL, inter);
+    }
 
-    if (team_points) free(team_points);
-    free(*pts);
-    free(pts);
-    //build_tree(new_pts, new_team, nodes, new_set, new_team_set, new_node_id);
+    /* Allocate memory for new points */
+    if (id < center_proc && rec_count > 0) {
+        sorted_pts = (double*) realloc(sorted_pts, (sorted_set * n_dims + rec_count) * sizeof(double));
+    }
+
+    /* Center processor scatters its L points to L team */
+    if (id < center_proc) {
+        MPI_Scatterv(NULL, NULL, NULL, MPI_DOUBLE, &sorted_pts[sorted_set * n_dims], rec_count, MPI_DOUBLE, 0, inter);
+    } else if (id == center_proc) {
+        MPI_Scatterv(sorted_pts, send_counts, send_displacements, MPI_DOUBLE, NULL, 0, MPI_DOUBLE, MPI_ROOT, inter);
+    } else {
+        MPI_Scatterv(NULL, NULL, NULL, MPI_DOUBLE, NULL, 0, MPI_DOUBLE, MPI_PROC_NULL, inter);
+    }
+
+    /* Get rid of L points at center processor */
+    if (id == center_proc && split > 0) {
+        double *new = (double*) malloc((sorted_set - split) * n_dims * sizeof(double));
+        memcpy(new, &sorted_pts[split * n_dims], (sorted_set - split) * n_dims * sizeof(double));
+        double *t = sorted_pts;
+        sorted_pts = new;
+        free(t);
+    }
+
+    if (rec_count > 0) sorted_set += rec_count / n_dims;
+    if (split > 0) sorted_set -= split;
+
+    /* Reconstruct pointer array */
+    pts = (double**) realloc(pts, sorted_set * sizeof(double*));
+    for (long i = 0; i < sorted_set; i++) {
+        pts[i] = &sorted_pts[i * n_dims];
+    }
+
+    MPI_Barrier(new_team);
+
+    build_tree(pts, new_team, nodes, sorted_set, new_team_set, new_node_id);
 }
 
 #pragma region print
@@ -869,72 +852,68 @@ int main(int argc, char *argv[])
 {
     double exec_time = -omp_get_wtime();
 
-     if(argc != 4){
+    MPI_Init(&argc, &argv);
+
+    if (argc != 4) {
         printf("Usage: %s <n_dims> <n_points> <seed>\n", argv[0]);
         exit(1);
     }
 
     n_dims = atoi(argv[1]);
-    if(n_dims < 2){
+    if (n_dims < 2) {
         printf("Illegal number of dimensions (%d), must be above 1.\n", n_dims);
         exit(2);
     }
 
     n_points = atol(argv[2]);
-    if(n_points < 1){
+    if (n_points < 1) {
         printf("Illegal number of points (%ld), must be above 0.\n", n_points);
         exit(3);
     }
-
-    MPI_Init(&argc, &argv);
 
     /* Create communicator without excess processors */
     MPI_Comm comm;
     MPI_Comm_rank(MPI_COMM_WORLD, &id);
     MPI_Comm_split(MPI_COMM_WORLD, id < n_points, id, &comm);
 
-    if (id == 0) {
+    if (!id) {
         printf("%d %ld\n", n_dims, 2 * n_points - 1);
     }
 
-    /* Kill excess processors */
-    if (id >= n_points) {
-        MPI_Finalize();
-        return 0;
-    }
-    
-    MPI_Comm_rank(comm, &id);
-    MPI_Comm_size(comm, &n_procs);
-
-    /* Generate points */
-    long pts_per_proc = n_points / n_procs;
-    long remainder = n_points % n_procs;
-    long to_consume = n_dims;
-    long my_set;
     double **pts = NULL;
     node_t *nodes = NULL;
+    if (id < n_points) {
+        MPI_Comm_rank(comm, &id);
+        MPI_Comm_size(comm, &n_procs);
 
-    if (id < remainder) {
-        my_set = pts_per_proc + 1;
-        to_consume *= (pts_per_proc + 1) * id;
+        /* Generate points */
+        long pts_per_proc = n_points / n_procs;
+        long remainder = n_points % n_procs;
+        long to_consume = n_dims;
+        long my_set;
+
+        if (id < remainder) {
+            my_set = pts_per_proc + 1;
+            to_consume *= (pts_per_proc + 1) * id;
+        }
+        else {
+            my_set = pts_per_proc;
+            to_consume *= (pts_per_proc + 1) * remainder + (pts_per_proc) * (id - remainder);
+        }
+
+        sprintf(argv[2], "%ld", my_set);
+        pts = get_points(argc, argv, &n_dims, &my_set, to_consume);
+
+        /* Build tree */
+        build_tree(pts, comm, &nodes, my_set, n_points, 0);
     }
-    else {
-        my_set = pts_per_proc;
-        to_consume *= (pts_per_proc + 1) * remainder + (pts_per_proc) * (id - remainder);
-    }
-
-    sprintf(argv[2], "%ld", my_set);
-    pts = get_points(argc, argv, &n_dims, &my_set, to_consume);
-
-    /* Build tree */
-    build_tree(pts, comm, &nodes, my_set, n_points, 0);
     
-    MPI_Barrier(comm);
+    MPI_Barrier(MPI_COMM_WORLD);
 
     exec_time += omp_get_wtime();
 
-    MPI_Comm_rank(comm, &id);
-    MPI_Comm_size(comm, &n_procs);
+    MPI_Comm_rank(MPI_COMM_WORLD, &id);
+    MPI_Comm_size(MPI_COMM_WORLD, &n_procs);
 
     if (!id) {
         fprintf(stderr, "%.1f\n", exec_time);
@@ -945,13 +924,13 @@ int main(int argc, char *argv[])
     if (n_procs < 2) {
         dump_tree(nodes);
     } else if (!id) {
-        MPI_Send(&send, 1, MPI_INT, 1, 1, comm);
-        MPI_Recv(&recv, 1, MPI_INT, n_procs - 1, 0, comm, &status);
+        MPI_Send(&send, 1, MPI_INT, 1, 1, MPI_COMM_WORLD);
+        MPI_Recv(&recv, 1, MPI_INT, n_procs - 1, 0, MPI_COMM_WORLD, &status);
         if (nodes) dump_tree(nodes);
     } else {
-        MPI_Recv(&recv, 1, MPI_INT, id - 1, id, comm, &status);
+        MPI_Recv(&recv, 1, MPI_INT, id - 1, id, MPI_COMM_WORLD, &status);
         if (nodes) dump_tree(nodes);
-        MPI_Send(&send, 1, MPI_INT, (id + 1) % n_procs, (id + 1) % n_procs, comm);
+        MPI_Send(&send, 1, MPI_INT, (id + 1) % n_procs, (id + 1) % n_procs, MPI_COMM_WORLD);
     }
 
 
