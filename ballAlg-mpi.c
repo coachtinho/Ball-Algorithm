@@ -12,11 +12,9 @@
 int n_dims, n_procs, id;
 long n_points, max_depth, diff;
 MPI_Status status;
-omp_lock_t attach_lock;
 
 enum MESSAGES {
-    TERMINATE = -1,
-    PRINT = -2
+    PRINT = -1
 };
 
 enum TAGS {
@@ -584,9 +582,12 @@ void free_list(node_t *head) {
     free_node(aux);
 }
 
-void finish_tree(double **pts, node_t **nodes, double **projections, long l, long r, long node_id, long depth)
+void finish_tree(double **pts, node_t *nodes, double **projections, long l, long r, long node_id, long depth, long base_id)
 {
-    node_t *node = create_node(node_id);
+    node_t *node = &nodes[node_id - base_id];
+    
+    node->id = node_id;
+    node->radius = 0.0;
 
     /* It's a leaf */
     if (r - l == 0)
@@ -594,9 +595,6 @@ void finish_tree(double **pts, node_t **nodes, double **projections, long l, lon
         memcpy(node->center, pts[l], n_dims * sizeof(double));
         node->left = -1;
         node->right = -1;
-        omp_set_lock(&attach_lock);
-        *nodes = attach_node(*nodes, node);
-        omp_unset_lock(&attach_lock);
         return;
     }
 
@@ -633,54 +631,61 @@ void finish_tree(double **pts, node_t **nodes, double **projections, long l, lon
     node->left = node_id + 1;
     node->right = node_id + 2 * (split_index + 1);
 
-    /* Add new node to list */
-    omp_set_lock(&attach_lock);
-    *nodes = attach_node(*nodes, node);
-    omp_unset_lock(&attach_lock);
-
     if (depth < max_depth || (depth == max_depth && omp_get_thread_num() < diff)) {
 #pragma omp taskgroup
         {
 #pragma omp task
-            finish_tree(pts, nodes, projections, l, l + split_index, node->left, depth + 1);
+            finish_tree(pts, nodes, projections, l, l + split_index, node->left, depth + 1, base_id);
 #pragma omp task
-            finish_tree(pts, nodes, projections, l + split_index + 1, r, node->right, depth + 1);
+            finish_tree(pts, nodes, projections, l + split_index + 1, r, node->right, depth + 1, base_id);
         }
     } else {
-        finish_tree(pts, nodes, projections, l, l + split_index, node->left, depth + 1);
-        finish_tree(pts, nodes, projections, l + split_index + 1, r, node->right, depth + 1);
+        finish_tree(pts, nodes, projections, l, l + split_index, node->left, depth + 1, base_id);
+        finish_tree(pts, nodes, projections, l + split_index + 1, r, node->right, depth + 1, base_id);
     }
 }
 
-void build_tree(double **pts, MPI_Comm team, node_t **nodes, long my_set, long team_set, long node_id) {
+long build_tree(double **pts, MPI_Comm team, node_t **nodes, long my_set, long team_set, long node_id) {
     MPI_Comm_size(team, &n_procs);
     MPI_Comm_rank(team, &id);
 
     /* Alone in team, finish sequentially */
     if (n_procs == 1) {
+        double *to_free = *pts;
         /* Allocate memory for projections */
         double **projections = (double **)malloc(my_set * sizeof(double *));
         double *proj = (double *)malloc(my_set * n_dims * sizeof(double));
-        double *to_free = *pts;
-        max_depth = (int)log2(omp_get_max_threads());
-        diff = omp_get_max_threads() - (1 << max_depth);
         for (long i = 0; i < my_set; i++)
         {
             projections[i] = &proj[i * n_dims];
         }
-        omp_init_lock(&attach_lock);
+
+        max_depth = (int)log2(omp_get_max_threads());
+        diff = omp_get_max_threads() - (1 << max_depth);
+
+        /* Allocate memory for nodes */
+        node_t *node_arr = (node_t *)malloc((2 * my_set - 1) * sizeof(node_t));
+        assert(nodes);
+        double *centers = (double *)malloc((2 * my_set - 1) * n_dims * sizeof(double));
+        assert(centers);
+
+        for (long i = 0; i < 2 * my_set - 1; i++)
+        {
+            node_arr[i].center = &centers[i * n_dims];
+        }
+
 #pragma omp parallel
 #pragma omp single
         {
 #pragma omp task
-            finish_tree(pts, nodes, projections, 0, my_set - 1, node_id, 0);
+            finish_tree(pts, node_arr, projections, 0, my_set - 1, node_id, 0, node_id);
         }
-        omp_destroy_lock(&attach_lock);
+        *nodes = attach_node(*nodes, node_arr);
         free(projections);
         free(proj);
         free(to_free);
         free(pts);
-        return;
+        return 2 * my_set - 1;
     }
 
     /* Find a and b */
@@ -714,7 +719,7 @@ void build_tree(double **pts, MPI_Comm team, node_t **nodes, long my_set, long t
     double center[n_dims];
     long split = distr_find_center(sorted_projs, sorted_set, team_set, center, team);
     free(sorted_projs);
-
+    
     /* Calculate radius */
     double max_distance = 0.0;
     double radius;
@@ -729,7 +734,7 @@ void build_tree(double **pts, MPI_Comm team, node_t **nodes, long my_set, long t
     MPI_Reduce(&max_distance, &radius, 1, MPI_DOUBLE, MPI_MAX, 0, team);
 
     /* Processor with center sends its id to leader so it can broadcast it */
-    int center_proc = -1;
+    int center_proc = 0;
     if (!id && split == -1) {
         MPI_Recv(&center_proc, 1, MPI_INT, MPI_ANY_SOURCE, CENTER, team, &status); 
     } else if (split != -1) {
@@ -739,7 +744,12 @@ void build_tree(double **pts, MPI_Comm team, node_t **nodes, long my_set, long t
 
     long left = node_id + 1;
     long right = node_id + 2 * (team_set / 2);
-    long new_node_id = id < center_proc ? left : right;
+    long new_node_id;
+    if (center_proc) {
+        new_node_id = id < center_proc ? left : right;
+    } else {
+        new_node_id = id <= center_proc ? left : right;
+    }
 
     /* Add new node to leader's list */
     if (!id) {
@@ -752,17 +762,36 @@ void build_tree(double **pts, MPI_Comm team, node_t **nodes, long my_set, long t
     }
 
     /* Split communicator */
+    /* Processor with center is part of R group unless it is processor 0 */
     MPI_Comm new_team, inter;
     int new_id, new_procs;
-    long new_team_set = team_set / 2 + (team_set % 2 && id >= center_proc);
-    MPI_Comm_split(team, id >= center_proc, id, &new_team);
+    long new_team_set;
+    if (center_proc) {
+        /* Center processor is on R group */
+        new_team_set = team_set / 2 + (team_set % 2 && id >= center_proc);
+        MPI_Comm_split(team, id >= center_proc, id, &new_team);
+    } else {
+        /* Center processor is on L group */
+        new_team_set = team_set / 2 + (team_set % 2 && id > center_proc);
+        MPI_Comm_split(team, id > center_proc, id, &new_team);
+    }
     MPI_Comm_rank(new_team, &new_id);
     MPI_Comm_size(new_team, &new_procs);
     /* Create intercommunicator */
-    if (id < center_proc) {
-        MPI_Intercomm_create(new_team, 0, team, center_proc, INTER, &inter);
+    if (center_proc) {
+        /* Center processor is on R group */
+        if (id < center_proc) {
+            MPI_Intercomm_create(new_team, 0, team, center_proc, INTER, &inter);
+        } else {
+            MPI_Intercomm_create(new_team, 0, team, 0, INTER, &inter);
+        }
     } else {
-        MPI_Intercomm_create(new_team, 0, team, 0, INTER, &inter);
+        /* Center processor is on L group */
+        if (id <= center_proc) {
+            MPI_Intercomm_create(new_team, 0, team, center_proc + 1, INTER, &inter);
+        } else {
+            MPI_Intercomm_create(new_team, 0, team, 0, INTER, &inter);
+        }
     }
 
     /* Calculate counts and displacements */
@@ -771,46 +800,93 @@ void build_tree(double **pts, MPI_Comm team, node_t **nodes, long my_set, long t
     int send_displacements[n_procs - new_procs];
     int sum = 0;
     if (id == center_proc) {
-        long remainder = split % (n_procs - new_procs);
-        for (long i = 0; i < n_procs - new_procs; i++) {
-            send_counts[i] = (split / (n_procs - new_procs) + (i < remainder)) * n_dims;
-            send_displacements[i] = sum;
-            sum += send_counts[i];
+        if (center_proc) {
+            /* Center processor is on R group */
+            long remainder = split % (n_procs - new_procs);
+            for (long i = 0; i < n_procs - new_procs; i++) {
+                send_counts[i] = (split / (n_procs - new_procs) + (i < remainder)) * n_dims;
+                send_displacements[i] = sum;
+                sum += send_counts[i];
+            }
+        } else {
+            /* Center processor is on L group */
+            long remainder = (sorted_set - split) % (n_procs - new_procs);
+            for (long i = 0; i < n_procs - new_procs; i++) {
+                send_counts[i] = ((sorted_set - split) / (n_procs - new_procs) + (i < remainder)) * n_dims;
+                send_displacements[i] = sum;
+                sum += send_counts[i];
+            }
         }
     }
-    if (id < center_proc) {
-        MPI_Scatter(send_counts, 1, MPI_INT, &rec_count, 1, MPI_INT, 0, inter);
-    } else if (id == center_proc) {
-        MPI_Scatter(send_counts, 1, MPI_INT, &rec_count, 1, MPI_INT, MPI_ROOT, inter);
+    if (center_proc) {
+        /* Center processor is on R group */
+        if (id < center_proc) {
+            MPI_Scatter(send_counts, 1, MPI_INT, &rec_count, 1, MPI_INT, 0, inter);
+        } else if (id == center_proc) {
+            MPI_Scatter(send_counts, 1, MPI_INT, &rec_count, 1, MPI_INT, MPI_ROOT, inter);
+        } else {
+            MPI_Scatter(send_counts, 1, MPI_INT, &rec_count, 1, MPI_INT, MPI_PROC_NULL, inter);
+        }
     } else {
-        MPI_Scatter(send_counts, 1, MPI_INT, &rec_count, 1, MPI_INT, MPI_PROC_NULL, inter);
+        /* Center processor is on L group */
+        if (id > center_proc) {
+            MPI_Scatter(send_counts, 1, MPI_INT, &rec_count, 1, MPI_INT, 0, inter);
+        } else if (id == center_proc) {
+            MPI_Scatter(send_counts, 1, MPI_INT, &rec_count, 1, MPI_INT, MPI_ROOT, inter);
+        } else {
+            MPI_Scatter(send_counts, 1, MPI_INT, &rec_count, 1, MPI_INT, MPI_PROC_NULL, inter);
+        }
     }
 
     /* Allocate memory for new points */
-    if (id < center_proc && rec_count > 0) {
+    if (rec_count > 0) {
         sorted_pts = (double*) realloc(sorted_pts, (sorted_set * n_dims + rec_count) * sizeof(double));
     }
 
-    /* Center processor scatters its L points to L team */
-    if (id < center_proc) {
-        MPI_Scatterv(NULL, NULL, NULL, MPI_DOUBLE, &sorted_pts[sorted_set * n_dims], rec_count, MPI_DOUBLE, 0, inter);
-    } else if (id == center_proc) {
-        MPI_Scatterv(sorted_pts, send_counts, send_displacements, MPI_DOUBLE, NULL, 0, MPI_DOUBLE, MPI_ROOT, inter);
+    /* Center processor scatters its points */
+    if (center_proc) {
+        /* Center processor is on R group */
+        if (id < center_proc) {
+            MPI_Scatterv(NULL, NULL, NULL, MPI_DOUBLE, &sorted_pts[sorted_set * n_dims], rec_count, MPI_DOUBLE, 0, inter);
+        } else if (id == center_proc) {
+            MPI_Scatterv(sorted_pts, send_counts, send_displacements, MPI_DOUBLE, NULL, 0, MPI_DOUBLE, MPI_ROOT, inter);
+        } else {
+            MPI_Scatterv(NULL, NULL, NULL, MPI_DOUBLE, NULL, 0, MPI_DOUBLE, MPI_PROC_NULL, inter);
+        }
     } else {
-        MPI_Scatterv(NULL, NULL, NULL, MPI_DOUBLE, NULL, 0, MPI_DOUBLE, MPI_PROC_NULL, inter);
+        /* Center processor is on L group */
+        if (id > center_proc) {
+            MPI_Scatterv(NULL, NULL, NULL, MPI_DOUBLE, &sorted_pts[sorted_set * n_dims], rec_count, MPI_DOUBLE, 0, inter);
+        } else if (id == center_proc) {
+            MPI_Scatterv(&sorted_pts[split * n_dims], send_counts, send_displacements, MPI_DOUBLE, NULL, 0, MPI_DOUBLE, MPI_ROOT, inter);
+        } else {
+            MPI_Scatterv(NULL, NULL, NULL, MPI_DOUBLE, NULL, 0, MPI_DOUBLE, MPI_PROC_NULL, inter);
+        }
     }
 
-    /* Get rid of L points at center processor */
-    if (id == center_proc && split > 0) {
-        double *new = (double*) malloc((sorted_set - split) * n_dims * sizeof(double));
-        memcpy(new, &sorted_pts[split * n_dims], (sorted_set - split) * n_dims * sizeof(double));
-        double *t = sorted_pts;
-        sorted_pts = new;
-        free(t);
+    if (center_proc) {
+        /* Get rid of L points at center processor */
+        if (id == center_proc && split > 0) {
+            double *new = (double*) malloc((sorted_set - split) * n_dims * sizeof(double));
+            memcpy(new, &sorted_pts[split * n_dims], (sorted_set - split) * n_dims * sizeof(double));
+            double *t = sorted_pts;
+            sorted_pts = new;
+            free(t);
+            sorted_set -= split;
+        }
+    } else {
+        /* Get rid of R points at center processor */
+        if (id == center_proc) {
+            double *new = (double*) malloc(split * n_dims * sizeof(double));
+            memcpy(new, sorted_pts, split * n_dims * sizeof(double));
+            double *t = sorted_pts;
+            sorted_pts = new;
+            free(t);
+            sorted_set = split;
+        }
     }
 
     if (rec_count > 0) sorted_set += rec_count / n_dims;
-    if (split > 0) sorted_set -= split;
 
     /* Reconstruct pointer array */
     pts = (double**) realloc(pts, sorted_set * sizeof(double*));
@@ -818,9 +894,10 @@ void build_tree(double **pts, MPI_Comm team, node_t **nodes, long my_set, long t
         pts[i] = &sorted_pts[i * n_dims];
     }
 
+
     MPI_Barrier(new_team);
 
-    build_tree(pts, new_team, nodes, sorted_set, new_team_set, new_node_id);
+    return build_tree(pts, new_team, nodes, sorted_set, new_team_set, new_node_id);
 }
 
 #pragma region print
@@ -840,9 +917,11 @@ void print_node(node_t *node)
     printf(" \n");
 }
 
-void dump_tree(node_t *nodes)
+void dump_tree(long n_nodes, node_t *nodes)
 {
-    for (node_t *aux = nodes; aux != NULL; aux = aux->next)
+    for (long i = 0; i < n_nodes; i++)
+        print_node(&nodes[i]);
+    for (node_t *aux = nodes->next; aux != NULL; aux = aux->next)
         print_node(aux);
 }
 
@@ -882,6 +961,7 @@ int main(int argc, char *argv[])
 
     double **pts = NULL;
     node_t *nodes = NULL;
+    long n_nodes = 0;
     if (id < n_points) {
         MPI_Comm_rank(comm, &id);
         MPI_Comm_size(comm, &n_procs);
@@ -905,7 +985,7 @@ int main(int argc, char *argv[])
         pts = get_points(argc, argv, &n_dims, &my_set, to_consume);
 
         /* Build tree */
-        build_tree(pts, comm, &nodes, my_set, n_points, 0);
+        n_nodes = build_tree(pts, comm, &nodes, my_set, n_points, 0);
     }
     
     MPI_Barrier(MPI_COMM_WORLD);
@@ -922,14 +1002,14 @@ int main(int argc, char *argv[])
     int send = PRINT, recv;
     /* print */
     if (n_procs < 2) {
-        dump_tree(nodes);
+        dump_tree(n_nodes, nodes);
     } else if (!id) {
         MPI_Send(&send, 1, MPI_INT, 1, 1, MPI_COMM_WORLD);
         MPI_Recv(&recv, 1, MPI_INT, n_procs - 1, 0, MPI_COMM_WORLD, &status);
-        if (nodes) dump_tree(nodes);
+        if (nodes) dump_tree(n_nodes, nodes);
     } else {
         MPI_Recv(&recv, 1, MPI_INT, id - 1, id, MPI_COMM_WORLD, &status);
-        if (nodes) dump_tree(nodes);
+        if (nodes) dump_tree(n_nodes, nodes);
         MPI_Send(&send, 1, MPI_INT, (id + 1) % n_procs, (id + 1) % n_procs, MPI_COMM_WORLD);
     }
 

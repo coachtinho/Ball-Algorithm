@@ -415,7 +415,7 @@ int main(int argc, char *argv[])
     /* Allocate memory for nodes */
     node_t *nodes = (node_t *)malloc((2 * n_points - 1) * sizeof(node_t));
     assert(nodes);
-    double *centers = (double *)malloc((2 * n_points - 1) * n_dims * sizeof(node_t));
+    double *centers = (double *)malloc((2 * n_points - 1) * n_dims * sizeof(double));
     assert(centers);
 
     for (long i = 0; i < 2 * n_points - 1; i++)
