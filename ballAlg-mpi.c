@@ -44,7 +44,7 @@ double quick_distance(double *pt1, double *pt2)
 {
     double dist = 0.0;
 
-    for (int d = 0; d < n_dims; d++)
+    for (int d = 0; d < n_dims - 1; d++)
         dist += (pt1[d] - pt2[d]) * (pt1[d] - pt2[d]);
     return dist;
 }
@@ -53,14 +53,14 @@ double distance(double *pt1, double *pt2)
 {
     double dist = 0.0;
 
-    for (int d = 0; d < n_dims; d++)
+    for (int d = 0; d < n_dims - 1; d++)
         dist += (pt1[d] - pt2[d]) * (pt1[d] - pt2[d]);
     return sqrt(dist);
 }
 
 void mean(double *pt1, double *pt2, double *mean)
 {
-    for (long i = 0; i < n_dims; i++)
+    for (long i = 0; i < n_dims - 1; i++)
     {
         mean[i] = (pt1[i] + pt2[i]) / 2;
     }
@@ -71,8 +71,12 @@ void get_furthest_points(double **pts, long l, long r, double **a, double **b)
     long i;
     double dist, max_distance = 0.0;
 
-    /* Lock b as first point in set and find a */
     *b = pts[l];
+    for (i = l + 1; i < r + 1; i++) {
+        *b = pts[i][n_dims - 1] < (*b)[n_dims - 1] ? pts[i] : *b;
+    }
+
+    /* Lock b as first point in set and find a */
     for (i = l; i < r + 1; i++)
     {
         if ((dist = quick_distance(*b, pts[i])) > max_distance)
@@ -100,9 +104,23 @@ void distr_get_furthest_points(double **pts, MPI_Comm comm, long size, double *a
     double dist, max_distance = 0.0;
     double possible_points[n_dims * n_procs]; 
 
-    /* Lock b as first point in set of leader and broadcast it */
+    /* Find first point in initial set and send to leader */
+    memcpy(b, pts[0], n_dims * sizeof(double));
+    for (i = 1; i < size; i++) {
+        if (pts[i][n_dims - 1] < b[n_dims - 1]) {
+            memcpy(b, pts[i], n_dims * sizeof(double));
+        }
+    }
+    MPI_Gather(b, n_dims, MPI_DOUBLE, possible_points, n_dims, MPI_DOUBLE, 0, comm);
+
+    /* Lock b as first point in set and broadcast it */
     if (!id) {
-        memcpy(b, pts[0], n_dims * sizeof(double));
+        memcpy(b, possible_points, n_dims * sizeof(double));
+        for (int p = 1; p < n_procs; p++) {
+            if (possible_points[p * n_dims + n_dims - 1] < b[n_dims - 1]) {
+                memcpy(b, &possible_points[p * n_dims], n_dims * sizeof(double));
+            }
+        }
     }
     MPI_Bcast(b, n_dims, MPI_DOUBLE, 0, comm);
     
@@ -166,7 +184,7 @@ void sub_points(double *p1, double *p2, double *result)
 {
     long i;
 
-    for (i = 0; i < n_dims; i++)
+    for (i = 0; i < n_dims - 1; i++)
     {
         result[i] = p1[i] - p2[i];
     }
@@ -177,7 +195,7 @@ void add_points(double *p1, double *p2, double *result)
 {
     long i;
 
-    for (i = 0; i < n_dims; i++)
+    for (i = 0; i < n_dims - 1; i++)
     {
         result[i] = p1[i] + p2[i];
     }
@@ -189,7 +207,7 @@ double inner_product(double *p1, double *p2)
     long i;
     double result = 0.0;
 
-    for (i = 0; i < n_dims; i++)
+    for (i = 0; i < n_dims - 1; i++)
     {
         result += p1[i] * p2[i];
     }
@@ -202,7 +220,7 @@ void mul_point(double *p1, double constant, double *result)
 {
     long i;
 
-    for (i = 0; i < n_dims; i++)
+    for (i = 0; i < n_dims - 1; i++)
     {
         result[i] = p1[i] * constant;
     }
@@ -892,7 +910,7 @@ void print_node(node_t *node)
            node->right,
            node->radius);
 
-    for (long i = 0; i < n_dims; i++)
+    for (long i = 0; i < n_dims - 1; i++)
     {
         printf(" %lf", node->center[i]);
     }
@@ -965,7 +983,7 @@ int main(int argc, char *argv[])
         }
 
         sprintf(argv[2], "%ld", my_set);
-        pts = get_points(argc, argv, &n_dims, &my_set, to_consume);
+        pts = get_points(argc, argv, &n_dims, &my_set, to_consume, 1);
 
         /* Build tree */
         n_nodes = build_tree(pts, comm, &nodes, my_set, n_points, 0);

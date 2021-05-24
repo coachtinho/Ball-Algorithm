@@ -37,22 +37,29 @@ void consume_rand(int n) {
     }
 }
 
-double **get_points(int argc, char *argv[], int *n_dims, long *np, long n_consumes)
+double **get_points(int argc, char *argv[], int *n_dims, long *np, long n_consumes, int index_dim)
 {
     double **pt_arr;
     long i;
     int j;
 
-    pt_arr = (double **) create_array_pts(*n_dims, *np);
+    pt_arr = (double **) create_array_pts(*n_dims + 1, *np);
 
     int seed = atoi(argv[3]);
     srandom(seed);
 
     consume_rand(n_consumes);
 
-    for(i = 0; i < *np; i++)
+    for(i = 0; i < *np; i++) {
         for(j = 0; j < *n_dims; j++)
             pt_arr[i][j] = RANGE * ((double) random()) / RAND_MAX;
+        if (index_dim)
+            pt_arr[i][j] = i + (int) (n_consumes / *n_dims);
+    }
+
+    if (index_dim)
+        (*n_dims)++;
+        
 
 #ifdef DEBUG
     for (i = 0; i < *np; i++)
