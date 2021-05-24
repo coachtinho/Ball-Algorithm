@@ -7,8 +7,6 @@
 #include "gen_points.h"
 #include <mpi.h>
 
-/* TODO: remove list */
-
 int n_dims, n_procs, id;
 long n_points, max_depth, diff;
 MPI_Status status;
@@ -537,22 +535,6 @@ long distr_find_center(double *projs, long sort_size, long distr_size, double *c
     return has_centers[n_centers - 1];
 }
 
-long distr_partition(double **pts, double *projs, long size, double *center) {
-    long storeIndex = 0;
-
-    for (long i = 0; i < size; i++)
-    {
-        if (projs[i] < center[0])
-        {
-            SWAPDOUBLES(projs[storeIndex], projs[i]);
-            MEMSWAP(pts[storeIndex], pts[i]);
-            storeIndex++;
-        }
-    }
-
-    return storeIndex;
-}
-
 #pragma endregion
 
 node_t *create_node(long id) {
@@ -915,6 +897,7 @@ void print_node(node_t *node)
         printf(" %lf", node->center[i]);
     }
     printf(" \n");
+    fflush(stdout);
 }
 
 void dump_tree(long n_nodes, node_t *nodes)
