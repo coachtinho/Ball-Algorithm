@@ -242,6 +242,7 @@ void project(double *p, double *a, double *b_a, double *common_factor, double *r
 
 #pragma region qsort
 
+/* swap function from qsort implementation */
 #define MEMSWAP(a, b, size)         \
 {\
       size_t __size = (size);                                                      \
@@ -253,12 +254,6 @@ void project(double *p, double *a, double *b_a, double *common_factor, double *r
           *__b++ = __tmp;                                                      \
         } while (--__size > 0);                                                      \
 }
-/* {\ */
-    /* double *t[n_dims]; \ */
-    /* memcpy(t, a, size); \ */
-    /* memcpy(a, b, size); \ */
-    /* memcpy(b, t, size); \ */
-/* } */
 
 #define SWAP(x, y)         \
     {                      \
@@ -498,7 +493,9 @@ long distr_sorting(double *pts, double *proj, long size, MPI_Comm comm, double *
 
     /* Final distribution of sorted array */
     *sort_proj = (double*) malloc(sum * sizeof(double));
+    assert(sort_proj);
     *sort_pts = (double*) malloc(sum * sizeof(double));
+    assert(sort_pts);
     MPI_Alltoallv(proj, counts, displacements, MPI_DOUBLE, *sort_proj, rec_counts, rec_displacements, MPI_DOUBLE, comm);
     MPI_Alltoallv(pts, counts, displacements, MPI_DOUBLE, *sort_pts, rec_counts, rec_displacements, MPI_DOUBLE, comm);
     quicksort(*sort_pts, *sort_proj, 0, sum / n_dims - 1);
@@ -567,8 +564,10 @@ long distr_find_center(double *projs, long sort_size, long distr_size, double *c
 
 node_t *create_node(long id) {
     node_t *node = (node_t*) malloc(sizeof(node_t));
+    assert(node);
     node->id = id;
     node->center = (double*) malloc(n_dims * sizeof(double));
+    assert(node->center);
     node->radius = 0.0;
     node->next = NULL;
 
@@ -664,7 +663,9 @@ long build_tree(double **pts, MPI_Comm team, node_t **nodes, long my_set, long t
         double *to_free = *pts;
         /* Allocate memory for projections */
         double **projections = (double **)malloc(my_set * sizeof(double *));
+        assert(projections);
         double *proj = (double *)malloc(my_set * n_dims * sizeof(double));
+        assert(proj);
         for (long i = 0; i < my_set; i++)
         {
             projections[i] = &proj[i * n_dims];
@@ -712,6 +713,7 @@ long build_tree(double **pts, MPI_Comm team, node_t **nodes, long my_set, long t
 
     /* Allocate memory for projections */
     double *proj = (double*) malloc(my_set * n_dims * sizeof(double));
+    assert(proj);
     for (long i = 0; i < my_set; i++)
     {
         project(pts[i], a, b_a, common_factor, &proj[i * n_dims]);
@@ -851,6 +853,7 @@ long build_tree(double **pts, MPI_Comm team, node_t **nodes, long my_set, long t
     /* Allocate memory for new points */
     if (rec_count > 0) {
         sorted_pts = (double*) realloc(sorted_pts, (sorted_set * n_dims + rec_count) * sizeof(double));
+        assert(sorted_pts);
     }
 
     /* Center processor scatters its points */
@@ -878,6 +881,7 @@ long build_tree(double **pts, MPI_Comm team, node_t **nodes, long my_set, long t
         /* Get rid of L points at center processor */
         if (id == center_proc && split > 0) {
             double *new = (double*) malloc((sorted_set - split) * n_dims * sizeof(double));
+            assert(new);
             memcpy(new, &sorted_pts[split * n_dims], (sorted_set - split) * n_dims * sizeof(double));
             double *t = sorted_pts;
             sorted_pts = new;
@@ -888,6 +892,7 @@ long build_tree(double **pts, MPI_Comm team, node_t **nodes, long my_set, long t
         /* Get rid of R points at center processor */
         if (id == center_proc) {
             double *new = (double*) malloc(split * n_dims * sizeof(double));
+            assert(new);
             memcpy(new, sorted_pts, split * n_dims * sizeof(double));
             double *t = sorted_pts;
             sorted_pts = new;
@@ -900,6 +905,7 @@ long build_tree(double **pts, MPI_Comm team, node_t **nodes, long my_set, long t
 
     /* Reconstruct pointer array */
     pts = (double**) realloc(pts, sorted_set * sizeof(double*));
+    assert(pts);
     for (long i = 0; i < sorted_set; i++) {
         pts[i] = &sorted_pts[i * n_dims];
     }

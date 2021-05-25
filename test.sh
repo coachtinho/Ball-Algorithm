@@ -75,73 +75,42 @@ do
     util=${file%.in}
     echo "FILE: ${file} (${CURRENT}/${TOTAL})"
     echo -n "Executing program... "
-    rm expected/${util}.mine &> /dev/null
+    rm expected/${util}.query.mine &> /dev/null
 
     if [ $(echo $PROG | grep mpi) ]; then
-        mpirun --use-hwthread-cpus -n 4 $PROG $(cat ${file}) 2>/dev/null > expected/${util}.mine
+        ${QUERY} <(mpirun --use-hwthread-cpus -n 4 $PROG $(cat ${file}) 2> /dev/null) $(cat ${util}.query) 2>/dev/null > expected/${util}.query.mine
     else
-        $PROG $(cat ${file}) 2>/dev/null > expected/${util}.mine
+        ${QUERY} <($PROG $(cat ${file}) 2> /dev/null) $(cat ${util}.query) 2>/dev/null > expected/${util}.query.mine
     fi
 
     if [ $? -eq 0 ]; then
         echo "DONE"
     else
-        echo "FAILED"
+        echo -e "FAILED\n"
         if [ "$COMPACT" = true ]; then
             clean_lines_up 2
         fi
         continue
     fi
 
-    echo -n "Comparing trees... "
-    cmp expected/${util}.tree expected/${util}.mine > /dev/null
-    if [ $? -ne 0 ]; then
-        echo "DIFFERENT"
-    else
-        echo "EQUAL"
-
-        echo -e "Cleaning...\n "
-        rm expected/${util}.mine
-
-        SUCCESS=$(($SUCCESS + 1))
-        if [ "$COMPACT" = true ]; then
-            clean_lines_up 4
-        fi
-
-        continue
-    fi
-
-    echo -n "Querying tree... "
-    $QUERY expected/${util}.mine $(cat ${util}.query) 2>/dev/null > expected/${util}.query.mine
-
-    if [ $? -eq 0 ]; then
-        echo "DONE"
-    else
-        echo "FAILED"
-        if [ "$COMPACT" = true ]; then
-            clean_lines_up 4
-        fi
-        continue
-    fi
-
     echo -n "Comparing outputs... "
-
     if [ "$(diff -q -b expected/${util}.query.out expected/${util}.query.mine)" != "" ]; then
-        echo "DIFFERENT"
+        echo -e "DIFFERENT\n"
         if [ "$COMPACT" = true ]; then
-            clean_lines_up 5
+            clean_lines_up 3
         fi
         continue
     else
         echo "EQUAL"
     fi
+
 
     echo -e "Cleaning...\n "
-    rm expected/${util}.mine expected/${util}.query.mine
+    rm expected/${util}.query.mine
 
     SUCCESS=$(($SUCCESS + 1))
     if [ "$COMPACT" = true ]; then
-        clean_lines_up 7
+        clean_lines_up 4
     fi
 done
 echo -e "${BOLD}${BLUE}FINAL RESULTS:${RESET}"
@@ -163,6 +132,6 @@ fi
 echo -e "${BOLD}Percentage: ${color}${perc}% ($SUCCESS / $TOTAL)${RESET}"
 
 if [ $SUCCESS -ne $TOTAL ]; then
-    echo -e "${BOLD}${ORANGE}NOTE:${RESET} Check ${BOLD}${TESTS_PATH}/${LOG_FOLDER}${RESET} to see the full results"
+    # echo -e "${BOLD}${ORANGE}NOTE:${RESET} Check ${BOLD}${TESTS_PATH}/${LOG_FOLDER}${RESET} to see the full results"
     exit 1
 fi
