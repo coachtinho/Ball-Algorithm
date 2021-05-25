@@ -74,14 +74,13 @@ do
     CURRENT=$(($CURRENT + 1))
     util=${file%.in}
     echo "FILE: ${file} (${CURRENT}/${TOTAL})"
-    echo -n "Executing program... " | tee -a $LOG_FOLDER/${util}.log
-    echo >> $LOG_FOLDER/${util}.log
+    echo -n "Executing program... "
     rm expected/${util}.mine &> /dev/null
 
     if [ $(echo $PROG | grep mpi) ]; then
-        mpirun --use-hwthread-cpus -n 4 $PROG $(cat ${file}) 2>/dev/null | tee -a expected/${util}.mine $LOG_FOLDER/${util}.log > /dev/null
+        mpirun --use-hwthread-cpus -n 4 $PROG $(cat ${file}) 2>/dev/null > expected/${util}.mine
     else
-        $PROG $(cat ${file}) 2>/dev/null | tee -a expected/${util}.mine $LOG_FOLDER/${util}.log > /dev/null
+        $PROG $(cat ${file}) 2>/dev/null > expected/${util}.mine
     fi
 
     if [ $? -eq 0 ]; then
@@ -94,10 +93,8 @@ do
         continue
     fi
 
-    echo >> $LOG_FOLDER/${util}.log
-    echo -n "Comparing trees... " | tee -a $LOG_FOLDER/${util}.log
-    echo >> $LOG_FOLDER/${util}.log
-    cmp expected/${util}.tree expected/${util}.mine >> $LOG_FOLDER/${util}.log
+    echo -n "Comparing trees... "
+    cmp expected/${util}.tree expected/${util}.mine > /dev/null
     if [ $? -ne 0 ]; then
         echo "DIFFERENT"
     else
@@ -105,10 +102,6 @@ do
 
         echo -e "Cleaning...\n "
         rm expected/${util}.mine
-
-        if [ "$CLEAN" = true ]; then
-            rm $LOG_FOLDER/${util}.log
-        fi
 
         SUCCESS=$(($SUCCESS + 1))
         if [ "$COMPACT" = true ]; then
@@ -118,9 +111,8 @@ do
         continue
     fi
 
-    echo -n "Querying tree... " | tee -a $LOG_FOLDER/${util}.log
-    echo >> $LOG_FOLDER/${util}.log
-    $QUERY expected/${util}.mine $(cat ${util}.query) 2>/dev/null | tee -a expected/${util}.query.mine $LOG_FOLDER/${util}.log > /dev/null
+    echo -n "Querying tree... "
+    $QUERY expected/${util}.mine $(cat ${util}.query) 2>/dev/null > expected/${util}.query.mine
 
     if [ $? -eq 0 ]; then
         echo "DONE"
@@ -132,12 +124,9 @@ do
         continue
     fi
 
-    echo >> $LOG_FOLDER/${util}.log
-    echo -n "Comparing outputs... " | tee -a $LOG_FOLDER/${util}.log
-    echo >> $LOG_FOLDER/${util}.log
+    echo -n "Comparing outputs... "
 
     if [ "$(diff -q -b expected/${util}.query.out expected/${util}.query.mine)" != "" ]; then
-        diff -b expected/${util}.query.out expected/${util}.query.mine >> $LOG_FOLDER/${util}.log
         echo "DIFFERENT"
         if [ "$COMPACT" = true ]; then
             clean_lines_up 5
@@ -149,10 +138,6 @@ do
 
     echo -e "Cleaning...\n "
     rm expected/${util}.mine expected/${util}.query.mine
-
-    if [ "$CLEAN" = true ]; then
-        rm $LOG_FOLDER/${util}.log
-    fi
 
     SUCCESS=$(($SUCCESS + 1))
     if [ "$COMPACT" = true ]; then
