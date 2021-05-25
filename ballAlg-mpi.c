@@ -242,13 +242,23 @@ void project(double *p, double *a, double *b_a, double *common_factor, double *r
 
 #pragma region qsort
 
-#define MEMSWAP(x, y)         \
-    {                      \
-        double temp[n_dims]; \
-        memcpy(temp, x, n_dims * sizeof(double));             \
-        memcpy(x, y, n_dims * sizeof(double));         \
-        memcpy(y, temp, n_dims * sizeof(double));         \
-    }
+#define MEMSWAP(a, b, size)         \
+{\
+      size_t __size = (size);                                                      \
+      char *__a = (char*) (a), *__b = (char*) (b);                                              \
+      do                                                                      \
+        {                                                                      \
+          char __tmp = *__a;                                                      \
+          *__a++ = *__b;                                                      \
+          *__b++ = __tmp;                                                      \
+        } while (--__size > 0);                                                      \
+}
+/* {\ */
+    /* double *t[n_dims]; \ */
+    /* memcpy(t, a, size); \ */
+    /* memcpy(a, b, size); \ */
+    /* memcpy(b, t, size); \ */
+/* } */
 
 #define SWAP(x, y)         \
     {                      \
@@ -290,8 +300,8 @@ long qsort_partition(double *pts, double *projs, long l, long r) {
         if (i >= j) {
             return j;
         }
-        MEMSWAP(&projs[i * n_dims], &projs[j * n_dims]);
-        MEMSWAP(&pts[i * n_dims], &pts[j * n_dims]);
+        MEMSWAP(&projs[i * n_dims], &projs[j * n_dims], n_dims * sizeof(double));
+        MEMSWAP(&pts[i * n_dims], &pts[j * n_dims], n_dims * sizeof(double));
     }
 }
 
@@ -1005,12 +1015,14 @@ int main(int argc, char *argv[])
     if (n_procs < 2) {
         dump_tree(n_nodes, nodes);
     } else if (!id) {
+        if (nodes) dump_tree(n_nodes, nodes);
+        fflush(stdout);
         MPI_Send(&send, 1, MPI_INT, 1, 1, MPI_COMM_WORLD);
         MPI_Recv(&recv, 1, MPI_INT, n_procs - 1, 0, MPI_COMM_WORLD, &status);
-        if (nodes) dump_tree(n_nodes, nodes);
     } else {
         MPI_Recv(&recv, 1, MPI_INT, id - 1, id, MPI_COMM_WORLD, &status);
         if (nodes) dump_tree(n_nodes, nodes);
+        fflush(stdout);
         MPI_Send(&send, 1, MPI_INT, (id + 1) % n_procs, (id + 1) % n_procs, MPI_COMM_WORLD);
     }
 
