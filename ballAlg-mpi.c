@@ -756,12 +756,6 @@ long build_tree(double **pts, MPI_Comm team, node_t **nodes, long my_set, long t
 
     long left = node_id + 1;
     long right = node_id + 2 * (team_set / 2);
-    long new_node_id;
-    if (center_proc) {
-        new_node_id = id < center_proc ? left : right;
-    } else {
-        new_node_id = id <= center_proc ? left : right;
-    }
 
     /* Add new node to leader's list */
     if (!id) {
@@ -778,13 +772,16 @@ long build_tree(double **pts, MPI_Comm team, node_t **nodes, long my_set, long t
     MPI_Comm new_team, inter;
     int new_id, new_procs;
     long new_team_set;
+    long new_node_id;
     if (center_proc) {
         /* Center processor is on R group */
         new_team_set = team_set / 2 + (team_set % 2 && id >= center_proc);
+        new_node_id = id < center_proc ? left : right;
         MPI_Comm_split(team, id >= center_proc, id, &new_team);
     } else {
         /* Center processor is on L group */
         new_team_set = team_set / 2 + (team_set % 2 && id > center_proc);
+        new_node_id = id <= center_proc ? left : right;
         MPI_Comm_split(team, id > center_proc, id, &new_team);
     }
     MPI_Comm_rank(new_team, &new_id);
@@ -807,14 +804,14 @@ long build_tree(double **pts, MPI_Comm team, node_t **nodes, long my_set, long t
     }
 
     /* Calculate counts and displacements */
-    int rec_count = -1;
+    int rec_count = 0;
     int send_counts[n_procs - new_procs];
     int send_displacements[n_procs - new_procs];
-    int sum = 0;
     if (id == center_proc) {
         if (center_proc) {
             /* Center processor is on R group */
             long remainder = split % (n_procs - new_procs);
+            int sum = 0;
             for (long i = 0; i < n_procs - new_procs; i++) {
                 send_counts[i] = (split / (n_procs - new_procs) + (i < remainder)) * n_dims;
                 send_displacements[i] = sum;
@@ -823,6 +820,7 @@ long build_tree(double **pts, MPI_Comm team, node_t **nodes, long my_set, long t
         } else {
             /* Center processor is on L group */
             long remainder = (sorted_set - split) % (n_procs - new_procs);
+            int sum = 0;
             for (long i = 0; i < n_procs - new_procs; i++) {
                 send_counts[i] = ((sorted_set - split) / (n_procs - new_procs) + (i < remainder)) * n_dims;
                 send_displacements[i] = sum;
@@ -833,20 +831,20 @@ long build_tree(double **pts, MPI_Comm team, node_t **nodes, long my_set, long t
     if (center_proc) {
         /* Center processor is on R group */
         if (id < center_proc) {
-            MPI_Scatter(send_counts, 1, MPI_INT, &rec_count, 1, MPI_INT, 0, inter);
+            MPI_Scatter(NULL, 0, MPI_INT, &rec_count, 1, MPI_INT, 0, inter);
         } else if (id == center_proc) {
-            MPI_Scatter(send_counts, 1, MPI_INT, &rec_count, 1, MPI_INT, MPI_ROOT, inter);
+            MPI_Scatter(send_counts, 1, MPI_INT, NULL, 0, MPI_INT, MPI_ROOT, inter);
         } else {
-            MPI_Scatter(send_counts, 1, MPI_INT, &rec_count, 1, MPI_INT, MPI_PROC_NULL, inter);
+            MPI_Scatter(NULL, 0, MPI_INT, NULL, 0, MPI_INT, MPI_PROC_NULL, inter);
         }
     } else {
         /* Center processor is on L group */
         if (id > center_proc) {
-            MPI_Scatter(send_counts, 1, MPI_INT, &rec_count, 1, MPI_INT, 0, inter);
+            MPI_Scatter(NULL, 0, MPI_INT, &rec_count, 1, MPI_INT, 0, inter);
         } else if (id == center_proc) {
-            MPI_Scatter(send_counts, 1, MPI_INT, &rec_count, 1, MPI_INT, MPI_ROOT, inter);
+            MPI_Scatter(send_counts, 1, MPI_INT, NULL, 0, MPI_INT, MPI_ROOT, inter);
         } else {
-            MPI_Scatter(send_counts, 1, MPI_INT, &rec_count, 1, MPI_INT, MPI_PROC_NULL, inter);
+            MPI_Scatter(NULL, 0, MPI_INT, NULL, 0, MPI_INT, MPI_PROC_NULL, inter);
         }
     }
 
